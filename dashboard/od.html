@@ -4,6 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>PopGen · Actual OD survey (PM23) emissions</title>
+      <base href="/montreal-traffic-emissions-dashboard/">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=Outfit:wght@500;600;700&display=swap" rel="stylesheet">
@@ -209,7 +210,7 @@
         <a class="dash-nav-link" data-page="od-zones" href="/?view=zones">Zone maps</a>
         <a class="dash-nav-link" data-page="od-buildings" href="/?view=buildings">Buildings</a>
         <a class="dash-nav-link" data-page="od-flows" href="/?view=flows">Flows</a>
-        <a class="dash-nav-link" data-page="od-boundaries" href="/od-zones-boundary.html">Boundaries</a>
+       <!-- <a class="dash-nav-link" data-page="od-boundaries" href="/od-zones-boundary.html">Boundaries</a> -->
       </nav>
       <span class="pill" id="liveHint">Zone maps</span>
     </header>
@@ -336,7 +337,7 @@
 
     function apiBase() {
       try {
-        const u = (new URLSearchParams(window.location.search).get('api') || '').trim();
+        const u = (new URLSearchParams(window.location.search).get('od-dashboard-api') || '').trim();
         if (u) return u.replace(/\/$/, '');
       } catch (_) { /* empty */ }
       if (window.location.protocol === 'file:') return 'http://127.0.0.1:5051';
@@ -745,7 +746,7 @@
     async function loadCmmZoneBoundaries() {
       try {
         if (!cmmZonesBoundaryGeojson) {
-          const raw = await fetchJson('/api/od/zones_boundary?island_only=0');
+          const raw = await fetchJson('/od-dashboard-api/od/zones_boundary?island_only=0');
           cmmZonesBoundaryGeojson = raw && raw.geojson;
         }
         applyCmmZoneBoundariesToMaps(cmmZonesBoundaryGeojson);
@@ -756,7 +757,7 @@
 
     async function loadMontrealBoundary() {
       try {
-        const gj = await fetchJson('/api/montreal_boundary.geojson');
+        const gj = await fetchJson('/od-dashboard-api/montreal_boundary.geojson');
         if (!gj || gj.type !== 'FeatureCollection' || !gj.features || !gj.features.length) return;
         montrealBoundaryGeojson = gj;
         MAP_SPECS.forEach(spec => applyMontrealBoundaryToView(spec.key));
@@ -786,8 +787,8 @@
       params.set('view', 'flows');
       if (destGeoId != null && destGeoId !== '') params.set('dest_geo_id', String(destGeoId));
       if (zb === 'dest') params.set('attribution', 'dest');
-      const api = (new URLSearchParams(window.location.search).get('api') || '').trim();
-      if (api) params.set('api', api);
+      const api = (new URLSearchParams(window.location.search).get('od-dashboard-api') || '').trim();
+      if (api) params.set('od-dashboard-api', api);
       window.location.href = '/?' + params.toString();
     }
 
@@ -851,12 +852,12 @@
     async function loadDualZoneMaps(minKg, maxKg) {
       const qs = buildZoneQuery(minKg, maxKg);
       try {
-        return await fetchJson('/api/od/zone_maps?' + qs);
+        return await fetchJson('/od-dashboard-api/od/zone_maps?' + qs);
       } catch (batchErr) {
         console.warn('zone_maps batch failed, falling back to two requests:', batchErr);
         const [dest, rules] = await Promise.all([
-          fetchJson('/api/od/zone_map?' + qs + '&zone_by=dest'),
-          fetchJson('/api/od/zone_map?' + qs + '&zone_by=rules'),
+          fetchJson('/od-dashboard-api/od/zone_map?' + qs + '&zone_by=dest'),
+          fetchJson('/od-dashboard-api/od/zone_map?' + qs + '&zone_by=rules'),
         ]);
         return { dest, rules };
       }
@@ -972,8 +973,8 @@
       const zonesPromise = refreshZones().catch(err => { console.error('zone maps:', err); return err; });
       const bootPromise = IS_EMBED
         ? Promise.resolve(null)
-        : fetchJson('/api/od/bootstrap').catch(err => { console.error('bootstrap:', err); return null; });
-      const zoneCodesPromise = fetchJson('/api/zone_codes').catch(() => null);
+        : fetchJson('/od-dashboard-api/od/bootstrap').catch(err => { console.error('bootstrap:', err); return null; });
+      const zoneCodesPromise = fetchJson('/od-dashboard-api/zone_codes').catch(() => null);
       const [, , boot, zoneCodes] = await Promise.all([
         loadMontrealBoundary(), loadCmmZoneBoundaries(), bootPromise, zoneCodesPromise,
       ]);

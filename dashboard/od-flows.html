@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
   <title>PopGen · PM23 actual OD · Incoming flows</title>
+      <base href="/montreal-traffic-emissions-dashboard/">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700&family=Outfit:wght@500;600;700&display=swap" rel="stylesheet">
@@ -250,7 +251,7 @@
         <a class="dash-nav-link" data-page="od-zones" href="/?view=zones">Zone maps</a>
         <a class="dash-nav-link" data-page="od-buildings" href="/?view=buildings">Buildings</a>
         <a class="dash-nav-link" data-page="od-flows" href="/?view=flows">Flows</a>
-        <a class="dash-nav-link" data-page="od-boundaries" href="/od-zones-boundary.html">Boundaries</a>
+        <!-- <a class="dash-nav-link" data-page="od-boundaries" href="/od-zones-boundary.html">Boundaries</a> -->
       </nav>
       <span class="pill" id="liveHint">Incoming flows</span>
     </header>
@@ -450,7 +451,7 @@
     let allFlowsPromise = null;   // in-flight bulk fetch
 
     function apiBase() {
-      const override = (qs.get('api') || '').trim().replace(/\/$/, '');
+      const override = (qs.get('od-dashboard-api') || '').trim().replace(/\/$/, '');
       if (override) return override;
       if (window.location.protocol === 'file:') return 'http://127.0.0.1:5051';
       return '';
@@ -634,7 +635,7 @@
 
     async function loadCmmZoneBoundaries() {
       try {
-        const raw = await fetchJson('/api/od/zones_boundary?island_only=0', 120000);
+        const raw = await fetchJson('/od-dashboard-api/od/zones_boundary?island_only=0', 120000);
         const gj = raw && raw.geojson;
         if (!gj || gj.type !== 'FeatureCollection' || !gj.features?.length || !map) return;
         if (zonesBoundaryLayer) {
@@ -659,7 +660,7 @@
 
     async function loadMontrealBoundary() {
       try {
-        const gj = await fetchJson('/api/montreal_boundary.geojson');
+        const gj = await fetchJson('/od-dashboard-api/montreal_boundary.geojson');
         if (!gj || gj.type !== 'FeatureCollection' || !gj.features?.length || !map) return;
         if (boundaryLayer) {
           map.removeLayer(boundaryLayer);
@@ -924,7 +925,7 @@
         if (!IS_EMBED) p.set('zone_by', 'rules');
         else p.delete('zone_by');
       }
-      if (API) p.set('api', API);
+      if (API) p.set('od-dashboard-api', API);
       const path = IS_EMBED
         ? window.location.pathname
         : (window.location.pathname.split('/').pop() || 'od-flows.html');
@@ -1345,7 +1346,7 @@
         _: String(Date.now()),
       });
       if (islandOnly) q.set('island_only', '1');
-      allFlowsPromise = fetchJson('/api/od/zone_incoming_flows_all?' + q.toString(), 180000)
+      allFlowsPromise = fetchJson('/od-dashboard-api/od/zone_incoming_flows_all?' + q.toString(), 180000)
         .then(data => {
           if (data && data.supported && data.zones) {
             allFlowsCache = data.zones;
@@ -1406,7 +1407,7 @@
       if (islandOnly) q.set('island_only', '1');
       try {
         const data = await fetchJson(
-          '/api/od/zone_incoming_flow?' + q.toString(),
+          '/od-dashboard-api/od/zone_incoming_flow?' + q.toString(),
           120000,
           flowsFetchAbort.signal
         );
@@ -1511,7 +1512,7 @@
         include_geojson: includeGeojson ? '1' : '0',
       });
       if (islandOnly) zq.set('island_only', '1');
-      let raw = await fetchJson('/api/od/zone_map?' + zq.toString(), includeGeojson ? 300000 : 120000);
+      let raw = await fetchJson('/od-dashboard-api/od/zone_map?' + zq.toString(), includeGeojson ? 300000 : 120000);
       if (raw && raw.error) {
         throw new Error(raw.message || raw.error || 'od zone_map failed');
       }
@@ -1588,7 +1589,7 @@
     async function ensureZoneCodeMap() {
       if (window.DashZoneUi && DashZoneUi.setZoneCodeMap) {
         try {
-          const data = await fetchJson('/api/zone_codes', 30000);
+          const data = await fetchJson('/od-dashboard-api/zone_codes', 30000);
           if (data && data.zone_codes) DashZoneUi.setZoneCodeMap(data.zone_codes);
           if (data && data.zone_names) DashZoneUi.setZoneNameMap(data.zone_names);
         } catch (e) {
@@ -1608,7 +1609,7 @@
 
     async function loadSidebarStats() {
       try {
-        const boot = await fetchJson('/api/od/bootstrap', 60000);
+        const boot = await fetchJson('/od-dashboard-api/od/bootstrap', 60000);
         bootCacheFlows = boot;
         if (boot.zone_codes && window.DashZoneUi) DashZoneUi.setZoneCodeMap(boot.zone_codes);
         if (boot.zone_names && window.DashZoneUi) DashZoneUi.setZoneNameMap(boot.zone_names);

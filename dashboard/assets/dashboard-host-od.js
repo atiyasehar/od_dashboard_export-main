@@ -9,7 +9,7 @@
 
   function apiBase() {
     try {
-      var u = (new URLSearchParams(window.location.search).get('api') || '').trim();
+      var u = (new URLSearchParams(window.location.search).get('od-dashboard-api') || '').trim();
       if (u) return u.replace(/\/$/, '');
     } catch (_) { /* empty */ }
     if (window.location.protocol === 'file:') return 'http://127.0.0.1:5051';
@@ -263,7 +263,7 @@
   }
 
   function loadHostSidebar() {
-    return fetchJson('/api/od/bootstrap', 120000).then(function (boot) {
+    return fetchJson('/od-dashboard-api/od/bootstrap', 120000).then(function (boot) {
       var stats = (boot && boot.stats_island_eligible)
         || (boot && (boot.stats_rules || boot.stats))
         || null;

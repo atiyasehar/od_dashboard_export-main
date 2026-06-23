@@ -440,7 +440,7 @@ app = Flask(
     static_url_path="/static",
 )
 if CORS is not None:
-    CORS(app, resources={r"/api/*": {"origins": "*"}}, methods=["GET", "OPTIONS"])
+    CORS(app, resources={r"/od-dashboard-api/*": {"origins": "*"}}, methods=["GET", "OPTIONS"])
 
 
 def _od10_unified_flows_table(cur) -> str | None:
@@ -590,7 +590,7 @@ def _arg_float(name: str, default):
         return default
 
 
-@app.route("/api/health")
+@app.route("/od-dashboard-api/health")
 def api_health():
     return jsonify({
         "ok": True,
@@ -607,7 +607,7 @@ def api_health():
 @app.errorhandler(500)
 def api_internal_error(err):
     """Never return HTML 500 for API routes."""
-    if request.path.startswith("/api/"):
+    if request.path.startswith("/od-dashboard-api/"):
         msg = getattr(err, "description", None) or str(err) or "internal error"
         return jsonify({"error": "server_error", "message": msg}), 500
     return (
@@ -617,7 +617,7 @@ def api_internal_error(err):
     )
 
 
-@app.route("/api/montreal_boundary.geojson")
+@app.route("/od-dashboard-api/montreal_boundary.geojson")
 def api_montreal_boundary():
     for fname in ("mtl_boundary_file_padded.geojson", "mtl_boundary_file.geojson"):
         path = _data_dir() / fname
@@ -626,14 +626,14 @@ def api_montreal_boundary():
     return jsonify({"type": "FeatureCollection", "features": []})
 
 
-@app.route("/api/od/zone_codes")
-@app.route("/api/zone_codes")
+@app.route("/od-dashboard-api/od/zone_codes")
+@app.route("/od-dashboard-api/zone_codes")
 def api_od10_zone_codes():
     return jsonify({"zone_codes": _zone_code_index(), "zone_names": _zone_name_index()})
 
 
-@app.route("/api/od/zones_boundary")
-@app.route("/api/zones_boundary")
+@app.route("/od-dashboard-api/od/zones_boundary")
+@app.route("/od-dashboard-api/zones_boundary")
 def api_od10_zones_boundary():
     """CMM (or island) zone polygon outlines — boundary lines only, for map background."""
     island_only = _request_island_only(default=False)
@@ -953,7 +953,7 @@ def _od10_zone_map_rows(
     return {"zones": out, "geojson": geojson_fc}
 
 
-@app.route("/api/od/zone_map")
+@app.route("/od-dashboard-api/od/zone_map")
 @_od10_api_errors
 def api_od10_zone_map():
     zone_by = (request.args.get("zone_by", "rules") or "rules").strip().lower()
@@ -1012,7 +1012,7 @@ def api_od10_zone_map():
         conn.close()
 
 
-@app.route("/api/od/zone_maps")
+@app.route("/od-dashboard-api/od/zone_maps")
 @_od10_api_errors
 def api_od10_zone_maps():
     """Both choropleths in one response (destination + rules)."""
@@ -1074,7 +1074,7 @@ def api_od10_zone_maps():
         conn.close()
 
 
-@app.route("/api/od/bootstrap")
+@app.route("/od-dashboard-api/od/bootstrap")
 @_od10_api_errors
 def api_od10_bootstrap():
     conn = get_conn()
@@ -1327,7 +1327,7 @@ def _od10_building_emission_scale_bounds(
     }
 
 
-@app.route("/api/od/building_emission_scale")
+@app.route("/od-dashboard-api/od/building_emission_scale")
 def api_od10_building_emission_scale():
     """Per-building min/max emissions (g) for the buildings map colour legend."""
     building_by = _normalize_building_by(request.args.get("building_by") or "rules")
@@ -1360,7 +1360,7 @@ def api_od10_building_emission_scale():
         conn.close()
 
 
-@app.route("/api/od/building_map")
+@app.route("/od-dashboard-api/od/building_map")
 def api_od10_building_map():
     """Building-level emissions from OD10 routes detail (rules or destination building)."""
     try:
@@ -1722,7 +1722,7 @@ def api_od10_building_map():
         conn.close()
 
 
-@app.route("/api/od/building_footprint")
+@app.route("/od-dashboard-api/od/building_footprint")
 def api_od10_building_footprint():
     building_id = (request.args.get("building_id") or "").strip()
     if not building_id:
@@ -1741,7 +1741,7 @@ def api_od10_building_footprint():
         conn.close()
 
 
-@app.route("/api/od/building_detail")
+@app.route("/od-dashboard-api/od/building_detail")
 def api_od10_building_detail():
     building_id = (request.args.get("building_id") or "").strip()
     if not building_id:
@@ -1856,20 +1856,20 @@ def api_od10_building_detail():
         conn.close()
 
 
-@app.route("/api/od/flows_zones")
+@app.route("/od-dashboard-api/od/flows_zones")
 def api_od10_flows_zones():
     """Fast zone list for od-flows.html (rules or dest choropleth, no polygons)."""
     zone_by = (request.args.get("zone_by", "rules") or "rules").strip().lower()
     if zone_by not in ("rules", "dest"):
         zone_by = "rules"
     with app.test_request_context(
-        f"/api/od/zone_map?zone_by={zone_by}&min_kg=0&island_only=1&include_geojson=0",
+        f"/od-dashboard-api/od/zone_map?zone_by={zone_by}&min_kg=0&island_only=1&include_geojson=0",
         method="GET",
     ):
         return api_od10_zone_map()
 
 
-@app.route("/api/od/zone_incoming_flow")
+@app.route("/od-dashboard-api/od/zone_incoming_flow")
 def api_od10_zone_incoming_flow():
     dest_id = (request.args.get("dest_geo_id", "") or "").strip()
     if not dest_id:
@@ -1981,7 +1981,7 @@ def api_od10_zone_incoming_flow():
         conn.close()
 
 
-@app.route("/api/od/zone_incoming_flows_all")
+@app.route("/od-dashboard-api/od/zone_incoming_flows_all")
 def api_od10_zone_incoming_flows_all():
     zone_by = (request.args.get("zone_by", "rules") or "rules").strip().lower()
     if zone_by == "meeting":

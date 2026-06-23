@@ -42,7 +42,7 @@
 
   function apiSuffix() {
     try {
-      var api = (new URLSearchParams(window.location.search).get('api') || '').trim();
+      var api = (new URLSearchParams(window.location.search).get('od-dashboard-api') || '').trim();
       return api ? ('&api=' + encodeURIComponent(api.replace(/\/$/, ''))) : '';
     } catch (_) {
       return '';
@@ -117,8 +117,8 @@
     params.set('v', FRAME_CACHE_BUST);
     try {
       var parentParams = new URLSearchParams(window.location.search);
-      var api = (parentParams.get('api') || '').trim();
-      if (api) params.set('api', api.replace(/\/$/, ''));
+      var api = (parentParams.get('od-dashboard-api') || '').trim();
+      if (api) params.set('od-dashboard-api', api.replace(/\/$/, ''));
       var attr = parentAttributionParam();
       if (attr === 'dest') params.set('attribution', 'dest');
     } catch (_) { /* empty */ }
