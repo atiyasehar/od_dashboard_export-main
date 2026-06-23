@@ -191,6 +191,7 @@
     <h1>CMM · Island-eligible car trips</h1>
     <p class="sub">
       PM23 survey dashboard — installation, PostgreSQL restore, and operations guide.<br>
+      <strong>Runtime:</strong> this bundle + <code>od_dashboard</code> only (no PopGen2023 repo required).<br>
       Repository: <a href="https://github.com/atiyasehar/od_dashboard_export-main">github.com/atiyasehar/od_dashboard_export-main</a>
     </p>
 
@@ -215,6 +216,7 @@
         <li><a href="#run">Start the server</a></li>
         <li><a href="#deploy">Shared host / subpath</a></li>
         <li><a href="#verify">Verify &amp; open browser</a></li>
+        <li><a href="#portable">Move / refresh dump</a></li>
         <li><a href="#api">API endpoints</a></li>
         <li><a href="#trouble">Troubleshooting</a></li>
         <li><a href="#layout">Folder layout</a></li>
@@ -223,7 +225,7 @@
 
     <!-- ARCHITECTURE DIAGRAM -->
     <h2 id="overview">Overview &amp; architecture</h2>
-    <p>This bundle is <strong>self-contained</strong>: static HTML/JS maps in the browser talk to a local <strong>Flask</strong> API, which reads <strong>pre-aggregated</strong> PostgreSQL tables.</p>
+    <p>This bundle is <strong>self-contained</strong>: static HTML/JS maps in the browser talk to a local <strong>Flask</strong> API, which reads <strong>pre-aggregated</strong> PostgreSQL tables in <code>od_dashboard</code> (schema <code>public</code>). Building maps use <code>building_emissions_od10</code> with <strong>expanded PM23 trips</strong> (<code>trips_weighted_*</code>), allocated by zone purpose and building capacity — not one leg per footprint.</p>
 
     <figure class="fig">
       <svg viewBox="0 0 720 220" width="720" height="220" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Architecture diagram">
@@ -381,7 +383,7 @@ copy %USERPROFILE%\Downloads\od_dashboard_tables.dump data\db\od_dashboard_table
       <thead><tr><th>Table</th><th>Approx. rows</th><th>Purpose</th></tr></thead>
       <tbody>
         <tr><td><code>zone_emissions_od10</code></td><td>938</td><td>Zone choropleth totals</td></tr>
-        <tr><td><code>building_emissions_od10</code></td><td>50,059</td><td>Per-building aggregates</td></tr>
+        <tr><td><code>building_emissions_od10</code></td><td>924,757</td><td>Per-building expanded trips + emissions (capacity allocation)</td></tr>
         <tr><td><code>buildings_footprint</code></td><td>927,307</td><td>Building polygons</td></tr>
         <tr><td><code>trips_route_emissions</code></td><td>116,929</td><td>Route-level trip stats</td></tr>
         <tr><td><code>zone_incoming_flows_od10</code></td><td>99,436</td><td>OD flow lines</td></tr>
@@ -512,6 +514,13 @@ pip install -r requirements.txt</code></pre>
       <figcaption>Figure 5 — Example healthy <code>/api/health</code> response.</figcaption>
     </figure>
 
+    <h2 id="portable">Move to another machine / refresh dump</h2>
+    <p>Copy the entire <code>od_dashboard_export-main/</code> folder. On the target machine: PostgreSQL + PostGIS, restore <code>data/db/od_dashboard_tables.dump</code>, <code>pip install -r requirements.txt</code>, run <code>run_dashboard.py</code>.</p>
+    <p>After updating precomputed tables on a dev PC (e.g. new <code>building_emissions_od10</code> from PopGen), re-create the dump so the bundle stays portable:</p>
+    <pre><code>pg_dump -h localhost -p 5433 -U postgres -d od_dashboard -Fc --no-owner --no-acl ^
+  -f data\db\od_dashboard_tables.dump</code></pre>
+    <p>Row counts and table list: see <code>manifest.json</code> in the bundle root.</p>
+
     <h2 id="api">API endpoints (selection)</h2>
     <p>Paths below use the default <code>/api</code> prefix. With <code>--api-prefix /od-dashboard-api</code>, prepend that instead (and include <code>--url-prefix</code> when mounted under a subpath).</p>
     <table>
@@ -549,6 +558,7 @@ pip install -r requirements.txt</code></pre>
     </figure>
 
     <ul>
+      <li><strong>Building tooltip shows 0 trips</strong> — Hard-refresh (Ctrl+Shift+R); confirm <code>building_emissions_od10</code> has <code>trips_weighted_*</code> &gt; 0; UI shows expanded trips, not leg counts.</li>
       <li><strong>503 “No OD10 zone table found”</strong> — Run restore; confirm the database name is <code>od_dashboard</code>.</li>
       <li><strong><code>pg_restore</code> not found</strong> — Add PostgreSQL <code>bin</code> to PATH.</li>
       <li><strong>UI looks old after update</strong> — Ctrl+Shift+R or incognito window.</li>
@@ -577,7 +587,7 @@ pip install -r requirements.txt</code></pre>
     </figure>
 
     <div class="footer">
-      <p>Export bundle · PM23 OD survey · Created 2026-06-16 · Maintainer: <a href="https://github.com/atiyasehar">atiyasehar</a></p>
+      <p>Export bundle · PM23 OD survey · Updated 2026-06-23 · Maintainer: <a href="https://github.com/atiyasehar">atiyasehar</a></p>
       <p>Open this file in any browser: <code>README.html</code></p>
     </div>
   </div>

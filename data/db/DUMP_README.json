@@ -2,7 +2,7 @@
   "dump_file": "data/db/od_dashboard_tables.dump",
   "dump_distribution": "OneDrive (not included in Git repository); also PopGen2023/Data/db/od_dashboard_tables.zip",
   "dump_download_url": "https://liveconcordia-my.sharepoint.com/:u:/g/personal/atiya_atiya_concordia_ca/IQDAgc05pD40SK9YSnDwFZURAcydIl6xbQHGRnafPX5VfIE?e=j6PxkO",
-  "dump_size_mb_approx": 172,
+  "dump_size_mb_approx": 238,
   "dump_filename": "od_dashboard_tables.dump",
   "database_name": "od_dashboard",
   "schema": "public",
@@ -44,5 +44,7 @@
     "building_emissions_od10",
     "buildings_footprint",
     "trips_route_emissions"
-  ]
+  ],
+  "building_emissions_rows_approx": 924757,
+  "building_emissions_note": "Capacity-allocated expanded trips (trips_weighted_rules/dest); UI shows weighted totals, not leg counts"
 }

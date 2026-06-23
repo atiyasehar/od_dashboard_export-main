@@ -2,11 +2,15 @@
 
 Portable **PM23 survey** dashboard — CMM island-eligible car trips, zone maps, buildings, and flows.
 
+**Self-contained at runtime:** this folder + PostgreSQL database **`od_dashboard`** (schema **`public`**). No PopGen2023 repo, routing, or `Synthetic2023` database required on the target machine.
+
 | Resource | Link |
 |----------|------|
 | **Full install guide (HTML)** | Open [`README.html`](README.html) in your browser |
 | **GitHub** | [github.com/atiyasehar/od_dashboard_export-main](https://github.com/atiyasehar/od_dashboard_export-main) |
 | **DB dump** | [OneDrive — od_dashboard_tables.dump](https://liveconcordia-my.sharepoint.com/:u:/g/personal/atiya_atiya_concordia_ca/IQDAgc05pD40SK9YSnDwFZURAcydIl6xbQHGRnafPX5VfIE?e=j6PxkO) — copy to `data/db/` |
+
+See **`manifest.json`** for current table row counts (e.g. `building_emissions_od10` — capacity-allocated expanded trips per footprint).
 
 ## Quick start
 
@@ -108,6 +112,13 @@ PGHOST=localhost PGPORT=5432 PGUSER=yourusername PGPASSWORD=yourpassword PORT=12
 python scripts/run_dashboard.py --bundle-root . --db-name od_dashboard
 ```
 
+If PostgreSQL is not on default port/host (e.g. `localhost:5433`):
+
+```powershell
+python scripts/run_dashboard.py --bundle-root . --db-name od_dashboard `
+  --db-host localhost --db-port 5433 --db-user postgres --db-password YOURPASS
+```
+
 Open **http://127.0.0.1:5051/** · Health: **http://127.0.0.1:5051/api/health**
 
 **Shared host / reverse proxy (subpath + custom API prefix):**
@@ -134,6 +145,38 @@ Example health URL with the flags above:
 `https://ngci.encs.concordia.ca/montreal-traffic-emissions-dashboard/od-dashboard-api/health`
 
 The server injects these settings into `assets/dashboard-config.js` at runtime so links and API calls stay under the correct prefix.
+
+## Move to another machine
+
+1. Copy the whole **`od_dashboard_export-main/`** folder (include `data/db/od_dashboard_tables.dump` if using unpack).
+2. On the target: install PostgreSQL + PostGIS, restore the dump into **`od_dashboard`**, `pip install -r requirements.txt`, run the server (see above).
+3. Internet access is needed for map basemap tiles and CDN JavaScript libraries.
+
+## Refresh the database dump (after PopGen updates)
+
+When you rebuild precomputed tables on a dev machine (e.g. promote new `building_emissions_od10` from PopGen), refresh the portable dump:
+
+```powershell
+# Option A — re-dump od_dashboard in place
+pg_dump -h localhost -p 5433 -U postgres -d od_dashboard -Fc --no-owner --no-acl `
+  -f data/db/od_dashboard_tables.dump
+
+# Option B — pack from PopGen2023 (updates manifest.json row counts)
+cd path\to\PopGen2023
+python scripts/bundle_od_dashboard.py pack --host localhost --port 5433 `
+  --user postgres --password YOURPASS --dbname od_dashboard --schema public `
+  --out-dir path\to\od_dashboard_export-main
+```
+
+Or copy a single table from PopGen into `od_dashboard`:
+
+```powershell
+pg_dump -h localhost -p 5433 -U postgres -d Synthetic2023 -t popgen.building_emissions_od10 --no-owner --no-acl -Fc -f building_emissions_od10.dump
+pg_restore -h localhost -p 5433 -U postgres -d od_dashboard --no-owner --no-acl --clean --if-exists building_emissions_od10.dump
+# then in od_dashboard: ALTER TABLE popgen.building_emissions_od10 SET SCHEMA public;  (if needed)
+```
+
+**Building trips in the UI** use **expanded PM23 trips** (`trips_weighted_*` in `building_emissions_od10`), allocated by zone purpose → building function/capacity — not raw leg counts.
 
 ## Layout
 

@@ -19,10 +19,11 @@
     "zone_flow_anchors_od10": 1074,
     "zone_emissions_categories_od10": 10,
     "buildings_footprint": 927307,
-    "building_emissions_od10": 50059,
+    "building_emissions_od10": 924757,
     "trips_route_emissions": 116929,
     "zone_emissions_od10": 938
   },
+  "building_emissions_note": "Zone-purpose capacity allocation; trips_weighted_rules ~2.3M, trips_weighted_dest ~2.4M expanded PM23 trips",
   "zone_table_mode": "unified",
   "boundaries": [
     "mtl_boundary_file.geojson",
@@ -33,5 +34,6 @@
     "geo_zone_sp23.csv"
   ],
   "dump_file": "data/db/od_dashboard_tables.dump",
-  "created_at": "2026-06-16T22:15:34.527366+00:00"
+  "created_at": "2026-06-23T20:45:43.469613+00:00",
+  "dump_size_mb_approx": 238.3
 }

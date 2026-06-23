@@ -265,11 +265,16 @@ def _od10_zero_building_metrics(props: dict) -> dict:
 
 
 def _od10_building_panel_row(row: dict) -> dict:
-    """Building maps/panels: primary trips = survey leg count (non-weighted)."""
+    """Building maps/panels: prefer expanded trips when capacity-split."""
     out = _od10_zero_building_metrics(row)
     legs = int(out.get("trips_legs") or 0)
     weighted = float(out.get("trips_weighted") or 0)
-    if out.get("trips_assigned_weighted") is None and legs > 0:
+    if out.get("trips_is_capacity_share") or out.get("trips_is_leg_d_fexp_split"):
+        out["trips"] = legs
+        out["trips_legs"] = legs
+        if weighted > 0:
+            out["trips_display"] = weighted
+    if out.get("trips_assigned_weighted") is None and weighted > 0:
         out["trips_assigned_weighted"] = weighted
     return out
 
@@ -1511,6 +1516,8 @@ def _footprint_features_from_inventory_rows(
                 "total_emissions_g": inv.get("total_emissions_g", 0),
                 "trips": inv.get("trips", inv.get("trips_legs", 0)),
                 "trips_legs": inv.get("trips_legs", inv.get("trips", 0)),
+                "trips_weighted": inv.get("trips_weighted", 0),
+                "trips_display": inv.get("trips_display"),
                 "total_distance_km": inv.get("total_distance_km", 0),
             })
         props = _od10_zero_building_metrics(props)
@@ -1563,6 +1570,8 @@ def _zone_building_fabric_features(
                 "total_emissions_g": inv.get("total_emissions_g", 0),
                 "trips": inv.get("trips", inv.get("trips_legs", 0)),
                 "trips_legs": inv.get("trips_legs", inv.get("trips", 0)),
+                "trips_weighted": inv.get("trips_weighted", 0),
+                "trips_display": inv.get("trips_display"),
                 "total_distance_km": inv.get("total_distance_km", 0),
             })
         props = _od10_zero_building_metrics(props)
@@ -1826,6 +1835,11 @@ def api_od10_building_map():
             legs_params.append(min_g)
             legs_params.append(row_limit + 1)
             if building_tab:
+                cap_share_sql = (
+                    "COALESCE(e.trips_is_capacity_share, false)"
+                    if _column_exists(cur, building_tab, "trips_is_capacity_share")
+                    else "false"
+                )
                 cur.execute(
                     f"""
                     SELECT b.id::text AS building_id,
@@ -1838,7 +1852,7 @@ def api_od10_building_map():
                            COALESCE(e.{dist_c}, 0)::double precision AS total_distance_km,
                            false AS trips_is_imputed,
                            COALESCE(e.{tw_c}, 0)::double precision AS trips_assigned_weighted,
-                           false AS trips_is_capacity_share,
+                           {cap_share_sql} AS trips_is_capacity_share,
                            {geom_sql} AS geom_json
                     FROM {SCHEMA}.{buildings_rel} AS b
                     LEFT JOIN {SCHEMA}.{building_tab} AS e ON e.building_id = b.id::text

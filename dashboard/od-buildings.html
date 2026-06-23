@@ -1013,7 +1013,7 @@
         ? (' · ' + Number(b.footprint_parts).toLocaleString() + ' footprint parts in source GIS')
         : '';
       sub.textContent = byLabel + (selectedGeoId ? (' · ' + zoneCt(selectedGeoId)) : '')
-        + (' · ' + formatTripsNum(b.trips) + ' trips · '
+        + (' · ' + formatTripsNum(buildingDisplayTrips(b)) + ' trips · '
           + formatKgCo2e(b.total_emissions_g) + ' kg CO₂e · '
           + formatDistanceKm(b.total_distance_km) + partsNote);
       const addr = b.address != null ? String(b.address).trim() : '';
@@ -1027,7 +1027,7 @@
         ['Units', b.units != null ? formatNum(b.units) : null],
         ['Floors', b.floors != null ? formatNum(b.floors) : null],
         ['Floor area (sq ft)', b.sq_ft != null ? formatNum(b.sq_ft) : null],
-        ['Car trips', formatTripsNum(b.trips)],
+        ['Car trips', formatTripsNum(buildingDisplayTrips(b))],
         ['Distance traveled', formatDistanceKm(b.total_distance_km)],
         ['CO₂ (kg)', formatKgCo2e(b.total_emissions_g)],
       ];
@@ -1094,6 +1094,9 @@
     async function selectBuildingMarker(building, viewKey) {
       if (!building || !building.building_id) return;
       building = normalizeBuildingMetrics(building);
+      if (building.trips_weighted == null && building.trips_display != null) {
+        building.trips_weighted = building.trips_display;
+      }
       selectedBuildingId = String(building.building_id);
       selectedBuildingMapKey = viewKey;
       selectedFootprintPart = building.footprint_part != null ? Number(building.footprint_part) : null;
@@ -1313,8 +1316,7 @@
       return window.DashZoneUi ? DashZoneUi.formatTrips(n) : String(Math.round(Number(n) || 0));
     }
     function formatBuildingTripsLabel(b) {
-      const m = normalizeBuildingMetrics(b);
-      return formatTripsNum(m.trips) + ' trips';
+      return formatTripsNum(buildingDisplayTrips(b)) + ' trips';
     }
     function formatDistanceKm(km) {
       const n = Number(km);
@@ -1338,10 +1340,20 @@
       return m;
     }
 
+    /** Prefer expanded trips when capacity allocation leaves leg count at 0. */
+    function buildingDisplayTrips(b) {
+      const m = normalizeBuildingMetrics(b);
+      if (m.trips_display != null && Number(m.trips_display) > 0) return Number(m.trips_display);
+      if (Number(m.trips_weighted) > 0) return Number(m.trips_weighted);
+      return Number(m.trips_legs != null ? m.trips_legs : m.trips) || 0;
+    }
+
     function buildingMetricsTooltipHtml(b) {
       const m = normalizeBuildingMetrics(b);
+      const tripsLabel = formatTripsNum(buildingDisplayTrips(m)) + ' trips'
+        + ((Number(m.trips_weighted) > 0 && Number(m.trips_legs || m.trips) === 0) ? ' (expanded)' : '');
       return '<div style="font-size:11px"><strong>Building ' + String(m.building_id) + '</strong><br>'
-        + formatKgCo2e(m.total_emissions_g) + ' kg CO₂e · ' + formatTripsNum(m.trips) + ' trips · '
+        + formatKgCo2e(m.total_emissions_g) + ' kg CO₂e · ' + tripsLabel + ' · '
         + formatDistanceKm(m.total_distance_km) + '<br>'
         + '<span style="color:#5eead4">Click for details</span></div>';
     }
@@ -1718,6 +1730,8 @@
 
     function buildingHasTripActivity(b) {
       if (!b) return false;
+      const weighted = Number(b.trips_weighted);
+      if (Number.isFinite(weighted) && weighted > 0) return true;
       const trips = Number(b.trips != null ? b.trips : b.trips_legs);
       const emis = Number(b.total_emissions_g);
       return (Number.isFinite(trips) && trips > 0) || (Number.isFinite(emis) && emis > 0);
@@ -2050,6 +2064,8 @@
           p.total_emissions_g = b.total_emissions_g;
           p.trips = b.trips;
           p.trips_legs = b.trips_legs;
+          p.trips_weighted = b.trips_weighted;
+          p.trips_display = b.trips_display;
           p.total_distance_km = b.total_distance_km;
           p.in_inventory = true;
         } else {
@@ -2057,6 +2073,7 @@
           p.total_emissions_g = z.total_emissions_g;
           p.trips = z.trips;
           p.trips_legs = z.trips_legs;
+          p.trips_weighted = z.trips_weighted;
           p.total_distance_km = z.total_distance_km;
           if (p.in_inventory == null) p.in_inventory = false;
         }
@@ -2381,6 +2398,8 @@
         total_emissions_g: p.total_emissions_g,
         trips: p.trips,
         trips_legs: p.trips_legs,
+        trips_weighted: p.trips_weighted,
+        trips_display: p.trips_display,
         total_distance_km: p.total_distance_km,
         lat: null,
         lon: null,
