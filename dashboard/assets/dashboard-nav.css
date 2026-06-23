@@ -31,6 +31,12 @@
   background: linear-gradient(135deg, rgba(94, 234, 212, 0.18), rgba(56, 189, 248, 0.1));
 }
 
+body[data-hide-boundary-nav="true"] .dash-nav-link[data-page="od-boundaries"],
+body[data-hide-boundary-nav="true"] .dash-nav-link[data-page="boundaries"],
+body[data-hide-boundary-nav="true"] .dash-nav-boundaries {
+  display: none !important;
+}
+
 /* True center nav: side columns absorb width changes in #liveHint. */
 header.shell {
   display: grid;

@@ -102,6 +102,8 @@ def _apply_db_cli(
     if db_schema is not None:
         SCHEMA = db_schema.strip()
         _dashboard_server.SCHEMA = SCHEMA
+    _dashboard_server.DB_PARAMS.clear()
+    _dashboard_server.DB_PARAMS.update(DB_PARAMS)
 
 
 def _data_dir() -> Path:
@@ -573,6 +575,40 @@ def _od10_building_emissions_table(cur) -> str | None:
     return _resolve_od10_table(cur, OD10_BUILDING_EMISSIONS_CANDIDATES)
 
 
+def _od10_building_db_stats(cur) -> dict | None:
+    """Quick fingerprint so deploys can verify new vs old building_emissions dump."""
+    btab = _od10_building_emissions_table(cur)
+    if not btab:
+        return None
+    has_cap = _column_exists(cur, btab, "trips_is_capacity_share")
+    has_ref = _column_exists(cur, btab, "refreshed_at")
+    cap_sql = "BOOL_OR(trips_is_capacity_share)" if has_cap else "NULL"
+    ref_sql = "MAX(refreshed_at)" if has_ref else "NULL"
+    cur.execute(
+        f"""
+        SELECT COUNT(*)::bigint,
+               COALESCE(SUM(trips_weighted_rules), 0)::double precision,
+               COALESCE(SUM(trips_weighted_dest), 0)::double precision,
+               {cap_sql},
+               {ref_sql}
+        FROM {SCHEMA}.{btab}
+        """
+    )
+    row = cur.fetchone()
+    if not row:
+        return None
+    n, rules_w, dest_w, cap_any, refreshed_at = row
+    return {
+        "table": btab,
+        "rows": int(n or 0),
+        "trips_weighted_rules_total": float(rules_w or 0),
+        "trips_weighted_dest_total": float(dest_w or 0),
+        "capacity_alloc": bool(cap_any) if cap_any is not None else None,
+        "refreshed_at": refreshed_at.isoformat() if refreshed_at is not None else None,
+        "expected_rows_approx": 924757,
+    }
+
+
 def _od10_is_unified_building_table(cur, btab: str) -> bool:
     return _column_exists(cur, btab, "emissions_g_rules")
 
@@ -709,15 +745,39 @@ def _arg_float(name: str, default):
 def api_health():
     up = DEPLOY["url_prefix"]
     ap = DEPLOY["api_prefix"]
+    building_stats = None
+    zone_label_stats = None
+    db_ok = False
+    try:
+        conn = get_conn()
+        try:
+            cur = conn.cursor()
+            building_stats = _od10_building_db_stats(cur)
+            zone_label_stats = {
+                "zones_csv": str(_dashboard_server._zones_csv_path()),
+                "zones_csv_rows": len(_zone_code_index()),
+                "geo_zone_sp23_csv": str(_dashboard_server._geo_sp23_csv_path()),
+                "geo_zone_sp23_exists": _dashboard_server._geo_sp23_csv_path().exists(),
+                "zone_names_loaded": len(_zone_name_index()),
+                "sample_label_562": _zone_label_for("562"),
+            }
+            db_ok = True
+            cur.close()
+        finally:
+            conn.close()
+    except Exception as exc:
+        building_stats = {"error": str(exc)}
     return jsonify({
-        "ok": True,
+        "ok": db_ok,
         "service": "popgen-od-dashboard",
         "metrics_mode": "weighted" if _od10_metrics_weighted() else "legs",
         "schema": SCHEMA,
         "dbname": DB_PARAMS.get("dbname"),
         "db_host": DB_PARAMS.get("host"),
         "db_port": DB_PARAMS.get("port"),
-        "api_build": "2026-06-17-public-schema",
+        "api_build": "2026-06-23-capacity-buildings",
+        "building_emissions": building_stats,
+        "zone_labels": zone_label_stats,
         "deploy": {
             "url_prefix": up,
             "api_prefix": ap,
@@ -2438,22 +2498,45 @@ def api_od10_zone_incoming_flows_all():
         conn.close()
 
 
+def _deploy_cfg_dict() -> dict:
+    up = DEPLOY["url_prefix"]
+    ap = DEPLOY["api_prefix"]
+    api_base = f"{up}{ap}" if up or ap else "/api"
+    return {
+        "urlPrefix": up,
+        "apiPrefix": ap,
+        "apiBase": api_base,
+        "showBoundaryButton": DEPLOY["show_boundary_button"],
+    }
+
+
+def _deploy_inline_script() -> str:
+    """Inject before dashboard-config.js so deploy flags work even when assets are static."""
+    cfg = json.dumps(_deploy_cfg_dict(), separators=(",", ":"))
+    return f"<script>window.__dashDeploy={cfg};</script>\n  "
+
+
+def _serve_html_page(filename: str):
+    """Serve dashboard HTML with runtime deploy settings inlined (NGCI / subpath safe)."""
+    path = Path(app.static_folder) / filename
+    if not path.is_file():
+        return f"<p>{filename} not found.</p>", 404
+    html = path.read_text(encoding="utf-8")
+    inject = _deploy_inline_script()
+    marker = '<script src="assets/dashboard-config.js'
+    if marker in html and "__dashDeploy" not in html:
+        html = html.replace(marker, inject + marker, 1)
+    resp = Response(html, mimetype="text/html; charset=utf-8")
+    resp.headers["Cache-Control"] = "no-cache, must-revalidate"
+    return resp
+
+
 def _serve_od_dashboard():
-    d = Path(app.static_folder)
-    if d.exists():
-        resp = send_from_directory(d, "od-dashboard.html")
-        resp.headers["Cache-Control"] = "no-cache, must-revalidate"
-        return resp
-    return "<p>od-dashboard.html not found.</p>", 404
+    return _serve_html_page("od-dashboard.html")
 
 
 def _serve_od_html():
-    d = Path(app.static_folder)
-    if d.exists():
-        resp = send_from_directory(d, "od.html")
-        resp.headers["Cache-Control"] = "no-cache, must-revalidate"
-        return resp
-    return "<p>od.html not found.</p>", 404
+    return _serve_html_page("od.html")
 
 
 def _redirect_legacy_od_page(new_path: str):
@@ -2479,34 +2562,22 @@ def od_page():
 @app.route("/od-flows")
 @app.route("/od-flows.html")
 def od_flows_page():
-    d = Path(app.static_folder)
-    if d.exists():
-        resp = send_from_directory(d, "od-flows.html")
-        resp.headers["Cache-Control"] = "no-cache, must-revalidate"
-        return resp
-    return "<p>od-flows.html not found.</p>", 404
+    return _serve_html_page("od-flows.html")
 
 
 @app.route("/od-buildings")
 @app.route("/od-buildings.html")
 def od_buildings_page():
-    d = Path(app.static_folder)
-    if d.exists():
-        resp = send_from_directory(d, "od-buildings.html")
-        resp.headers["Cache-Control"] = "no-cache, must-revalidate"
-        return resp
-    return "<p>od-buildings.html not found.</p>", 404
+    return _serve_html_page("od-buildings.html")
 
 
 @app.route("/od-zones-boundary")
 @app.route("/od-zones-boundary.html")
 def od_zones_boundary_page():
-    d = Path(app.static_folder)
-    if d.exists():
-        resp = send_from_directory(d, "od-zones-boundary.html")
-        resp.headers["Cache-Control"] = "no-cache, must-revalidate"
-        return resp
-    return "<p>od-zones-boundary.html not found.</p>", 404
+    if not DEPLOY["show_boundary_button"]:
+        prefix = DEPLOY["url_prefix"] or ""
+        return redirect(f"{prefix}/" if prefix else "/", code=302)
+    return _serve_html_page("od-zones-boundary.html")
 
 
 @app.route("/od10")
@@ -2541,15 +2612,7 @@ def legacy_od10_zones_boundary_page():
 
 @app.route("/assets/dashboard-config.js")
 def dashboard_config_js():
-    up = DEPLOY["url_prefix"]
-    ap = DEPLOY["api_prefix"]
-    api_base = f"{up}{ap}" if up or ap else "/api"
-    cfg = {
-        "urlPrefix": up,
-        "apiPrefix": ap,
-        "apiBase": api_base,
-        "showBoundaryButton": DEPLOY["show_boundary_button"],
-    }
+    cfg = _deploy_cfg_dict()
     static_cfg = Path(app.static_folder) / "assets" / "dashboard-config.js"
     helpers = ""
     if static_cfg.is_file():
@@ -2644,7 +2707,10 @@ if __name__ == "__main__":
     print(f"  URL prefix: {up or '(root)'}")
     print(f"  API prefix: {ap}")
     print(f"  Boundaries nav: {'on' if DEPLOY['show_boundary_button'] else 'off'}")
-    print(f"  DB: {DB_PARAMS['user']}@{DB_PARAMS['host']}:{DB_PARAMS['port']}/{DB_PARAMS['dbname']} schema={SCHEMA}")
+    print(
+        f"  DB: {DB_PARAMS.get('user', '(default)')}@{DB_PARAMS.get('host', 'localhost')}:"
+        f"{DB_PARAMS.get('port', '5432')}/{DB_PARAMS.get('dbname', 'od_dashboard')} schema={SCHEMA}"
+    )
     print(f"  Buildings: {base}/od-buildings.html")
     print(f"  Flows: {base}/od-flows.html")
     if DEPLOY["show_boundary_button"]:

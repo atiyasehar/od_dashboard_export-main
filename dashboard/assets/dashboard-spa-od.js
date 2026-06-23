@@ -28,7 +28,7 @@
   var ready = {};
   var dataReady = {};
   var activePage = 'od-zones';
-  var FRAME_CACHE_BUST = '20260623-render-revert';
+  var FRAME_CACHE_BUST = '20260623-zone-labels';
 
   function parentAttributionParam() {
     try {
@@ -132,6 +132,9 @@
     try {
       var parentParams = new URLSearchParams(window.location.search);
       var api = (parentParams.get('api') || '').trim();
+      if (!api && window.DashConfig && typeof DashConfig.apiBase === 'function') {
+        api = DashConfig.apiBase();
+      }
       if (api) params.set('api', api.replace(/\/$/, ''));
       var attr = parentAttributionParam();
       if (attr === 'dest') params.set('attribution', 'dest');

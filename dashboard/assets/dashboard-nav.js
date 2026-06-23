@@ -200,6 +200,9 @@
         if (isSpaHost()) {
           e.preventDefault();
           if (page === 'od-boundaries' || page === 'boundaries') {
+            if (window.DashConfig && typeof DashConfig.showBoundaryButton === 'function' && !DashConfig.showBoundaryButton()) {
+              return;
+            }
             navigateWithTransition(fullPageUrl(page));
           } else {
             spaShowPage(page);
@@ -324,6 +327,35 @@
   markActiveNav();
   bindNavLinks();
   seedHostAttributionUrl();
+
+  function syncBoundaryNavFromHealth() {
+    if (window.DashConfig && typeof DashConfig.showBoundaryButton === 'function') {
+      if (!DashConfig.showBoundaryButton() && typeof DashConfig.applyBoundaryNav === 'function') {
+        DashConfig.applyBoundaryNav();
+      }
+      return;
+    }
+    var apiBase = '/api';
+    try {
+      if (window.DashConfig && typeof DashConfig.apiBase === 'function') apiBase = DashConfig.apiBase();
+      else if (window.DashConfig && DashConfig.apiPrefix) apiBase = DashConfig.apiPrefix;
+    } catch (_) { /* empty */ }
+    fetch(apiBase.replace(/\/$/, '') + '/health')
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (j) {
+        if (!j || !j.deploy || j.deploy.show_boundary_button !== false) return;
+        document.body.setAttribute('data-hide-boundary-nav', 'true');
+        document.querySelectorAll(
+          '.dash-nav-link[data-page="od-boundaries"], .dash-nav-link[data-page="boundaries"], .dash-nav-boundaries'
+        ).forEach(function (a) {
+          a.style.display = 'none';
+          a.setAttribute('aria-hidden', 'true');
+          a.tabIndex = -1;
+        });
+      })
+      .catch(function () { /* offline / static host */ });
+  }
+  syncBoundaryNavFromHealth();
 
   window.DashNav = {
     initAttributionTabs: initAttributionTabs,

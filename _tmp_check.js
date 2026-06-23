@@ -1,544 +1,4 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>PopGen · Actual OD survey (PM23) · Buildings</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=Outfit:wght@500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-  <script src="assets/dashboard-config.js?v=3"></script>
-  <script src="assets/dashboard-redirect-od.js?v=2"></script>
-  <link rel="stylesheet" href="assets/loading-overlay.css" />
-  <link rel="stylesheet" href="assets/dashboard-nav.css" />
-  <link rel="stylesheet" href="assets/dashboard-shell.css?v=10" />
-  <link rel="stylesheet" href="assets/dashboard-embed.css?v=9" />
-  <script src="assets/dashboard-embed.js?v=1"></script>
-  <script src="assets/dashboard-zone-ui.js?v=20"></script>
-  <script src="assets/loading-overlay.js?v=11"></script>
-  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/leaflet.heat@0.2.0/dist/leaflet-heat.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.2.0"></script>
-  <style>
-    :root {
-      --bg0: #070a0f;
-      --bg1: #0c1119;
-      --surface: #121a26;
-      --surface2: #1a2436;
-      --border: rgba(94, 129, 172, 0.22);
-      --text: #e8eef7;
-      --muted: #8b9cb8;
-      --accent: #5eead4;
-      --accent2: #38bdf8;
-      --green: #4ade80;
-      --amber: #fbbf24;
-      --rose: #fb7185;
-      --violet: #a78bfa;
-      --shadow: 0 24px 80px rgba(0, 0, 0, 0.45);
-      --radius: 14px;
-      --ease: cubic-bezier(0.22, 1, 0.36, 1);
-    }
-    * { box-sizing: border-box; }
-    html, body { height: 100%; margin: 0; }
-    body {
-      font-family: "DM Sans", system-ui, sans-serif;
-      background: radial-gradient(1200px 800px at 10% -10%, rgba(56, 189, 248, 0.08), transparent),
-        radial-gradient(900px 600px at 90% 0%, rgba(167, 139, 250, 0.06), transparent),
-        var(--bg0);
-      color: var(--text);
-      min-height: 100vh;
-    }
-    @keyframes fadeUp {
-      from { opacity: 0; transform: translateY(12px); }
-      to { opacity: 1; transform: translateY(0); }
-    }
-    @keyframes pulseRing {
-      0% { box-shadow: 0 0 0 0 rgba(94, 234, 212, 0.45); }
-      70% { box-shadow: 0 0 0 14px rgba(94, 234, 212, 0); }
-      100% { box-shadow: 0 0 0 0 rgba(94, 234, 212, 0); }
-    }
-    @keyframes dashMove {
-      to { stroke-dashoffset: -24; }
-    }
-    .app {
-      display: grid;
-      grid-template-columns: minmax(340px, 420px) 1fr;
-      grid-template-rows: auto 1fr;
-      min-height: 100vh;
-      gap: 0;
-    }
-    @media (max-width: 1100px) {
-      .app { grid-template-columns: 1fr; grid-template-rows: auto auto 1fr; }
-    }
-    header.shell {
-      grid-column: 1 / -1;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      flex-wrap: wrap;
-      gap: 0.75rem 1.5rem;
-      padding: 1rem 1.25rem 1rem 1.5rem;
-      border-bottom: 1px solid var(--border);
-      background: linear-gradient(180deg, rgba(18, 26, 38, 0.95), rgba(12, 17, 25, 0.6));
-      backdrop-filter: blur(12px);
-      animation: fadeUp 0.6s var(--ease) both;
-    }
-    header.shell h1 {
-      margin: 0;
-      font-family: Outfit, sans-serif;
-      font-weight: 700;
-      font-size: 1.35rem;
-      letter-spacing: -0.02em;
-      background: linear-gradient(135deg, var(--text), var(--accent));
-      -webkit-background-clip: text;
-      background-clip: text;
-      color: transparent;
-    }
-    header.shell .tagline { color: var(--muted); font-size: 0.88rem; }
-    .sidebar {
-      border-right: 1px solid var(--border);
-      padding: 1rem 1.25rem 1.5rem;
-      overflow-y: auto;
-      max-height: calc(100vh - 64px);
-      animation: fadeUp 0.65s var(--ease) 0.05s both;
-    }
-    @media (max-width: 1100px) {
-      .sidebar { max-height: none; border-right: 0; border-bottom: 1px solid var(--border); }
-    }
-    .main {
-      display: flex;
-      flex-direction: column;
-      min-height: 0;
-      animation: fadeUp 0.7s var(--ease) 0.1s both;
-    }
-    .kpis {
-      display: grid;
-      grid-template-columns: repeat(2, 1fr);
-      gap: 0.65rem;
-      margin-bottom: 1rem;
-    }
-    .kpi {
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: var(--radius);
-      padding: 0.75rem 1rem;
-      transition: border-color 0.25s var(--ease), transform 0.25s var(--ease);
-    }
-    .kpi:hover { border-color: rgba(94, 234, 212, 0.35); transform: translateY(-1px); }
-    .kpi .label { font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin-bottom: 0.2rem; }
-    .kpi .value { font-family: Outfit, sans-serif; font-size: 1.35rem; font-weight: 600; color: var(--accent); }
-    .kpi .value.green { color: var(--green); }
-    .kpi .sub { font-size: 0.68rem; color: var(--muted); margin-top: 0.15rem; line-height: 1.25; }
-    .charts-row-2 {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 0.75rem;
-      margin-bottom: 0.75rem;
-    }
-    @media (max-width: 520px) {
-      .charts-row-2 { grid-template-columns: 1fr; }
-    }
-    .charts-stack { display: flex; flex-direction: column; gap: 0.75rem; }
-    .card {
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: var(--radius);
-      padding: 0.75rem 0.85rem;
-      height: 220px;
-      box-shadow: var(--shadow);
-      transition: border-color 0.3s var(--ease);
-    }
-    .card:hover { border-color: rgba(56, 189, 248, 0.25); }
-    .card h3 { margin: 0 0 0.5rem; font-size: 0.78rem; font-weight: 600; color: var(--muted); font-family: Outfit, sans-serif; }
-    .card canvas { max-height: 170px; }
-    .map-wrap {
-      flex: 1;
-      display: flex;
-      flex-direction: column;
-      min-height: 720px;
-      position: relative;
-    }
-    .maps-section {
-      display: flex;
-      flex-direction: column;
-      min-height: 0;
-      flex: 1;
-    }
-    .maps-section-title {
-      font-size: 0.72rem;
-      font-weight: 600;
-      letter-spacing: 0.04em;
-      text-transform: uppercase;
-      color: var(--muted);
-      padding: 0.35rem 0.75rem 0.25rem;
-    }
-    .maps-dual {
-      flex: 1;
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 0.5rem;
-      min-height: 0;
-      padding: 0 0.5rem 0.5rem;
-    }
-    @media (max-width: 900px) {
-      .maps-dual { grid-template-columns: 1fr; }
-    }
-    .map-panel {
-      display: flex;
-      flex-direction: column;
-      min-height: 280px;
-      border: 1px solid var(--border);
-      border-radius: var(--radius);
-      overflow: hidden;
-      background: var(--bg1);
-    }
-    .map-panel-label {
-      font-size: 0.72rem;
-      font-weight: 600;
-      color: var(--muted);
-      padding: 0.4rem 0.55rem;
-      border-bottom: 1px solid var(--border);
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 0.35rem;
-    }
-    .map-panel-label strong { color: var(--text); font-weight: 600; }
-    .map-el {
-      flex: 1;
-      width: 100%;
-      min-height: 260px;
-    }
-    .map-toolbar {
-      display: flex;
-      flex-wrap: wrap;
-      align-items: center;
-      gap: 0.5rem 0.75rem;
-      padding: 0.75rem 1rem;
-      background: var(--bg1);
-      border-bottom: 1px solid var(--border);
-      font-size: 0.82rem;
-      color: var(--muted);
-    }
-    .map-toolbar strong { color: var(--text); font-weight: 600; }
-    .preset-row { display: flex; flex-wrap: wrap; gap: 0.35rem; align-items: center; }
-    .preset-filter-row {
-      display: flex;
-      flex-wrap: wrap;
-      align-items: center;
-      gap: 0.35rem 0.5rem;
-      flex: 1 1 auto;
-      min-width: 0;
-    }
-    .chip {
-      border: 1px solid var(--border);
-      background: rgba(255,255,255,0.03);
-      color: var(--text);
-      border-radius: 999px;
-      padding: 0.35rem 0.75rem;
-      font-size: 0.78rem;
-      cursor: pointer;
-      transition: background 0.2s, border-color 0.2s, transform 0.15s;
-      font-family: inherit;
-    }
-    .chip:hover { background: rgba(94, 234, 212, 0.08); border-color: rgba(94, 234, 212, 0.35); }
-    .chip.active {
-      background: linear-gradient(135deg, rgba(94, 234, 212, 0.2), rgba(56, 189, 248, 0.12));
-      border-color: rgba(94, 234, 212, 0.5);
-      color: var(--accent);
-    }
-    .pill {
-      border: 1px solid var(--border);
-      border-radius: 999px;
-      padding: 0.2rem 0.55rem;
-      font-variant-numeric: tabular-nums;
-      font-size: 0.78rem;
-      color: var(--muted);
-    }
-    .toolbar-divider { width: 1px; height: 22px; background: var(--border); margin: 0 0.15rem; }
-    input[type="number"], select {
-      width: 5.2rem;
-      background: var(--surface2);
-      border: 1px solid var(--border);
-      color: var(--text);
-      border-radius: 8px;
-      padding: 0.35rem 0.45rem;
-      font-size: 0.8rem;
-    }
-    select { width: auto; min-width: 6.5rem; }
-    .btn {
-      background: linear-gradient(135deg, var(--accent), var(--accent2));
-      border: 0;
-      color: #042f2e;
-      border-radius: 10px;
-      padding: 0.4rem 0.85rem;
-      font-weight: 700;
-      font-size: 0.78rem;
-      cursor: pointer;
-      font-family: inherit;
-      transition: filter 0.2s, transform 0.15s;
-    }
-    .btn:hover { filter: brightness(1.08); transform: translateY(-1px); }
-    .btn.secondary {
-      background: var(--surface2);
-      color: var(--text);
-      border: 1px solid var(--border);
-    }
-    .btn.secondary:hover { border-color: var(--muted); }
-    .toggle {
-      display: inline-flex;
-      align-items: center;
-      gap: 0.35rem;
-      cursor: pointer;
-      user-select: none;
-    }
-    .toggle input { accent-color: var(--accent); }
-    .flow-panel {
-      position: absolute;
-      top: 72px;
-      right: 12px;
-      width: min(380px, calc(100% - 24px));
-      max-height: min(520px, 70vh);
-      overflow: auto;
-      background: rgba(12, 17, 25, 0.92);
-      border: 1px solid var(--border);
-      border-radius: var(--radius);
-      box-shadow: var(--shadow);
-      padding: 1rem;
-      z-index: 1000;
-      backdrop-filter: blur(14px);
-      animation: fadeUp 0.35s var(--ease) both;
-      display: none;
-    }
-    .flow-panel.open { display: block; }
-    .flow-panel h4 { margin: 0 0 0.35rem; font-family: Outfit, sans-serif; font-size: 1.05rem; }
-    .flow-panel .sub { color: var(--muted); font-size: 0.8rem; margin-bottom: 0.75rem; }
-    .leaflet-pane.leaflet-tooltip-pane { z-index: 920 !important; }
-    .leaflet-tooltip.building-map-tooltip {
-      z-index: 920 !important;
-      pointer-events: none;
-      border: 1px solid rgba(94, 234, 212, 0.55);
-      background: rgba(12, 17, 25, 0.94);
-      color: #e2e8f0;
-      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
-    }
-    .building-selection-label {
-      background: transparent;
-      border: none;
-    }
-    .building-selection-label-inner {
-      display: inline-block;
-      padding: 0.2rem 0.45rem;
-      border-radius: 6px;
-      background: rgba(12, 17, 25, 0.92);
-      border: 1px solid rgba(94, 234, 212, 0.75);
-      color: #f8fafc;
-      font-size: 11px;
-      font-weight: 600;
-      line-height: 1.25;
-      white-space: nowrap;
-      box-shadow: 0 6px 18px rgba(0, 0, 0, 0.4);
-      transform: translate(-50%, -110%);
-    }
-    .flow-highlight {
-      margin-top: 0.55rem;
-      padding: 0.5rem 0.6rem;
-      border: 1px solid rgba(34, 197, 94, 0.42);
-      border-radius: 10px;
-      background: rgba(34, 197, 94, 0.12);
-      color: #bbf7d0;
-    }
-    .flow-table { width: 100%; border-collapse: collapse; font-size: 0.75rem; }
-    .flow-table th, .flow-table td { padding: 0.35rem 0.25rem; text-align: left; border-bottom: 1px solid var(--border); }
-    .flow-table th { color: var(--muted); font-weight: 500; }
-    .flow-table tr.highest-emitting { background: rgba(34, 197, 94, 0.12); color: #dcfce7; }
-    .close-x {
-      float: right;
-      background: none;
-      border: 0;
-      color: var(--muted);
-      font-size: 1.25rem;
-      line-height: 1;
-      cursor: pointer;
-      padding: 0 0.25rem;
-    }
-    .close-x:hover { color: var(--text); }
-    .building-kv { display: grid; grid-template-columns: auto 1fr; gap: 0.25rem 0.75rem; font-size: 0.78rem; margin-top: 0.35rem; }
-    .building-kv dt { color: var(--muted); margin: 0; }
-    .building-kv dd { margin: 0; color: var(--text); font-weight: 500; word-break: break-word; }
-    .building-footprint-selected path,
-    .building-footprint-selected {
-      filter: drop-shadow(0 0 2px #ffffff) drop-shadow(0 0 6px #5eead4) drop-shadow(0 0 14px rgba(94, 234, 212, 0.85));
-    }
-    .building-footprint-fill path { pointer-events: none; }
-    .building-footprint-outline path {
-      pointer-events: none;
-      stroke-linejoin: round;
-      stroke-linecap: round;
-    }
-    .zone-drill-peer path {
-      cursor: pointer;
-    }
-    .zone-drill-selected path {
-      pointer-events: none;
-    }
-    .building-footprint-hit path {
-      pointer-events: all !important;
-      cursor: pointer;
-    }
-    .building-emission-overlay path {
-      pointer-events: none !important;
-    }
-    .legend-mini { display: flex; align-items: center; gap: 0.35rem; font-size: 0.72rem; margin-top: 0.5rem; color: var(--muted); }
-    .flow-legend-bar {
-      flex: 1;
-      height: 6px;
-      border-radius: 99px;
-      background: linear-gradient(90deg, #22c55e, #dc2626);
-      max-width: 120px;
-    }
-    .emissions-legend-wrap {
-      padding: 0.35rem 1rem 0.5rem;
-      background: var(--bg1);
-      border-bottom: 1px solid var(--border);
-    }
-    .emissions-legend-gradient {
-      height: 14px;
-      border-radius: 4px;
-      border: 1px solid rgba(15, 23, 42, 0.25);
-      background: linear-gradient(90deg, #22c55e 0%, #a3e635 22%, #fde047 48%, #fb923c 72%, #dc2626 100%);
-    }
-    .emissions-legend-ticks {
-      display: flex;
-      justify-content: space-between;
-      font-size: 0.72rem;
-      font-variant-numeric: tabular-nums;
-      color: var(--text);
-      margin-top: 0.2rem;
-      font-weight: 600;
-    }
-    .emissions-legend-caption {
-      text-align: center;
-      font-size: 0.7rem;
-      color: var(--muted);
-      margin-top: 0.15rem;
-    }
-    .advanced {
-      display: inline-flex;
-      flex-wrap: wrap;
-      align-items: center;
-      gap: 0.35rem;
-      margin-top: 0;
-    }
-    .err { color: #fda4af; padding: 0.85rem 1.1rem; font-size: 0.82rem; max-width: min(920px, 100%); white-space: pre-wrap; line-height: 1.45; border: 1px solid rgba(251,113,133,0.35); border-radius: 12px; margin: 0.75rem 1rem; background: rgba(127,29,29,0.2); }
-    .leaflet-flow-line { stroke-linecap: round; }
-    svg path.leaflet-flow-line { animation: dashMove 1.2s linear infinite; }
-    .zone-selected { animation: pulseRing 2s ease-out infinite; }
-  </style>
-</head>
-<body data-dash-page="od-buildings">
-  <div id="pageLoading" class="page-loading hidden" aria-live="polite">
-    <div class="page-loading-backdrop" aria-hidden="true"></div>
-    <div class="page-loading-content">
-      <img id="loadingGif" class="page-loading-img active" src="assets/original/gif-loading1.gif?v=10" alt="Loading">
-      <img id="loadingCompleteGif" class="page-loading-img" src="assets/original/loading-complete.gif?v=10" alt="Complete">
-    </div>
-  </div>
-  <div class="app">
-    <header class="shell">
-      <div>
-        <h1>Actual OD survey · PM23 buildings</h1>
-        <div class="tagline">Greater Montreal · PM23 actual OD</div>
-      </div>
-      <nav class="dash-nav" aria-label="OD dashboard views">
-        <a class="dash-nav-link" data-page="od-zones" href="?view=zones">Zone maps</a>
-        <a class="dash-nav-link" data-page="od-buildings" href="?view=buildings">Buildings</a>
-        <a class="dash-nav-link" data-page="od-flows" href="?view=flows">Flows</a>
-        <a class="dash-nav-link dash-nav-boundaries" data-page="od-boundaries" href="od-zones-boundary.html">Boundaries</a>
-      </nav>
-      <span class="pill" id="liveHint">Click a zone to explore its buildings</span>
-    </header>
 
-    <aside class="sidebar">
-      <div class="kpis" id="kpis">
-        <div class="kpi"><div class="label" id="kpi-trips-label">Car trips (expanded)</div><div class="value" id="kpi-trips">—</div><div class="sub" id="kpi-trips-sub"></div></div>
-        <div class="kpi"><div class="label">CO₂ (kg)</div><div class="value" id="kpi-co2">—</div></div>
-        <div class="kpi"><div class="label">Distance (km)</div><div class="value" id="kpi-km">—</div></div>
-        <div class="kpi"><div class="label">Avg kg / trip</div><div class="value green" id="kpi-avg">—</div></div>
-      </div>
-      <div class="charts-row-2">
-        <div class="card"><h3>Emissions by category (t CO₂) · island</h3><canvas id="chart-emissions"></canvas></div>
-        <div class="card"><h3>Trips by category · island</h3><canvas id="chart-trips"></canvas></div>
-      </div>
-      <div class="charts-stack">
-        <div class="card"><h3>Emissions share · island</h3><canvas id="chart-donut"></canvas></div>
-        <div class="card"><h3>Distance by category (km) · island</h3><canvas id="chart-distance"></canvas></div>
-        <div class="card" id="purposeMotifCard" style="display:none">
-          <h3>CO₂ by detailed trip motif</h3>
-          <div class="sub" style="margin:-0.2rem 0 0.35rem;font-size:0.72rem;color:var(--muted)">Parallel enrichment table, joined on route leg keys</div>
-          <canvas id="chart-purpose-motif"></canvas>
-        </div>
-      </div>
-    </aside>
-
-    <section class="main">
-      <div class="map-top-strip">
-        <div class="map-top-filters">
-          <div class="preset-filter-row">
-            <span class="preset-row" id="presetChips"></span>
-            <span class="advanced">
-              <span>Custom (t)</span>
-              <label>min <input type="number" id="customMinKg" step="1" min="0" value="0" placeholder="0"></label>
-              <label>max <input type="number" id="customMaxKg" step="1" min="0" placeholder="∞"></label>
-              <button type="button" class="btn" id="applyCustomRange">Apply</button>
-            </span>
-          </div>
-          <button type="button" class="btn secondary map-top-zone-clear" id="clearBuildingZone">Show all zones</button>
-          <span class="pill map-top-count" id="bldgMapCount">zones: —</span>
-        </div>
-        <div class="map-top-legend-row">
-          <div class="emissions-legend-wrap" id="zoneEmissionsLegend">
-            <div class="emissions-legend-gradient" aria-hidden="true"></div>
-            <div class="emissions-legend-ticks">
-              <span id="legendEmissionsMin">—</span>
-              <span id="legendEmissionsMid">—</span>
-              <span id="legendEmissionsMax">—</span>
-            </div>
-            <div class="emissions-legend-caption" id="buildingLegendCaption">Zone choropleth · click a zone to load its buildings</div>
-          </div>
-          <nav class="dash-subnav map-toolbar-attribution" data-attribution-nav aria-label="Building attribution">
-            <button type="button" class="dash-subnav-link active" data-attribution="rules">Rules-based</button>
-            <button type="button" class="dash-subnav-link" data-attribution="dest">Destination zone</button>
-          </nav>
-        </div>
-      </div>
-      <div class="map-wrap">
-        <div class="maps-section">
-          <div class="maps-single-wrap">
-            <div class="maps-single">
-              <div class="map-view-panel active" data-attribution-panel="rules">
-                <div id="map-bldg-rules" class="map-el-full"></div>
-              </div>
-              <div class="map-view-panel" data-attribution-panel="dest" hidden>
-                <div id="map-bldg-dest" class="map-el-full"></div>
-              </div>
-            </div>
-          </div>
-        </div>
-        <div class="flow-panel" id="buildingPanel">
-          <button type="button" class="close-x" id="closeBuildingPanel" aria-label="Close">&times;</button>
-          <h4 id="buildingPanelTitle">Building</h4>
-          <div class="sub" id="buildingPanelSub"></div>
-          <dl class="building-kv" id="buildingPanelBody"></dl>
-        </div>
-      </div>
-    </section>
-  </div>
-
-  <script src="assets/dashboard-nav.js?v=17"></script>
-  <script>
     const IS_EMBED = !!(window.DashEmbed && DashEmbed.isEmbed);
     const DASH_PAGE = (document.body.dataset.dashPage || 'zones').trim();
     const IS_ZONE_PAGE = DASH_PAGE === 'zones';
@@ -1013,7 +473,7 @@
         ? (' · ' + Number(b.footprint_parts).toLocaleString() + ' footprint parts in source GIS')
         : '';
       sub.textContent = byLabel + (selectedGeoId ? (' · ' + zoneCt(selectedGeoId)) : '')
-        + (' · ' + formatTripsNum(buildingDisplayTrips(b)) + ' trips · '
+        + (' · ' + formatTripsNum(b.trips) + ' trips · '
           + formatKgCo2e(b.total_emissions_g) + ' kg CO₂e · '
           + formatDistanceKm(b.total_distance_km) + partsNote);
       const addr = b.address != null ? String(b.address).trim() : '';
@@ -1027,7 +487,7 @@
         ['Units', b.units != null ? formatNum(b.units) : null],
         ['Floors', b.floors != null ? formatNum(b.floors) : null],
         ['Floor area (sq ft)', b.sq_ft != null ? formatNum(b.sq_ft) : null],
-        ['Car trips', formatTripsNum(buildingDisplayTrips(b))],
+        ['Car trips', formatTripsNum(b.trips)],
         ['Distance traveled', formatDistanceKm(b.total_distance_km)],
         ['CO₂ (kg)', formatKgCo2e(b.total_emissions_g)],
       ];
@@ -1094,9 +554,6 @@
     async function selectBuildingMarker(building, viewKey) {
       if (!building || !building.building_id) return;
       building = normalizeBuildingMetrics(building);
-      if (building.trips_weighted == null && building.trips_display != null) {
-        building.trips_weighted = building.trips_display;
-      }
       selectedBuildingId = String(building.building_id);
       selectedBuildingMapKey = viewKey;
       selectedFootprintPart = building.footprint_part != null ? Number(building.footprint_part) : null;
@@ -1261,21 +718,38 @@
       ensureMapViewData('bldgRules');
       ensureMapViewData('bldgDest');
       const { minKg, maxKg } = getActiveEmissionRange();
-      const [rulesRes, destRes] = await Promise.allSettled([
-        loadBuildings(minKg, maxKg, 'rules', selectedGeoId),
-        loadBuildings(minKg, maxKg, 'dest', selectedGeoId),
+      const zoneId = selectedGeoId;
+      const [rulesRes, destRes, fabricRes] = await Promise.allSettled([
+        loadBuildings(minKg, maxKg, 'rules', zoneId),
+        loadBuildings(minKg, maxKg, 'dest', zoneId),
+        loadZoneFabric(zoneId),
       ]);
+      let fabricFc = null;
+      let fabricTruncated = false;
+      if (fabricRes.status === 'fulfilled') {
+        const rawFabric = fabricRes.value || {};
+        fabricFc = rawFabric.footprint_fc || null;
+        fabricTruncated = !!rawFabric.fabric_truncated;
+      } else {
+        console.warn('zone building fabric:', fabricRes.reason);
+      }
       if (rulesRes.status === 'fulfilled') {
-        mapViews.bldgRules.payload = parseBuildingMapResponse(rulesRes.value);
+        const parsed = parseBuildingMapResponse(rulesRes.value);
+        mergeFabricIntoPayload(parsed, fabricFc, parsed.buildings);
+        parsed.fabricTruncated = fabricTruncated || parsed.fabricTruncated;
+        mapViews.bldgRules.payload = parsed;
       } else {
         console.error('rules building_map:', rulesRes.reason);
-        mapViews.bldgRules.payload = { buildings: [], truncated: false };
+        mapViews.bldgRules.payload = { buildings: [], truncated: false, footprintFc: fabricFc ? explodeFootprintFc(fabricFc) : null };
       }
       if (destRes.status === 'fulfilled') {
-        mapViews.bldgDest.payload = parseBuildingMapResponse(destRes.value);
+        const parsed = parseBuildingMapResponse(destRes.value);
+        mergeFabricIntoPayload(parsed, fabricFc, parsed.buildings);
+        parsed.fabricTruncated = fabricTruncated || parsed.fabricTruncated;
+        mapViews.bldgDest.payload = parsed;
       } else {
         console.warn('dest building_map:', destRes.reason);
-        mapViews.bldgDest.payload = { buildings: [], truncated: false };
+        mapViews.bldgDest.payload = { buildings: [], truncated: false, footprintFc: fabricFc ? explodeFootprintFc(fabricFc) : null };
       }
     }
 
@@ -1316,7 +790,8 @@
       return window.DashZoneUi ? DashZoneUi.formatTrips(n) : String(Math.round(Number(n) || 0));
     }
     function formatBuildingTripsLabel(b) {
-      return formatTripsNum(buildingDisplayTrips(b)) + ' trips';
+      const m = normalizeBuildingMetrics(b);
+      return formatTripsNum(m.trips) + ' trips';
     }
     function formatDistanceKm(km) {
       const n = Number(km);
@@ -1340,20 +815,10 @@
       return m;
     }
 
-    /** Prefer expanded trips when capacity allocation leaves leg count at 0. */
-    function buildingDisplayTrips(b) {
-      const m = normalizeBuildingMetrics(b);
-      if (m.trips_display != null && Number(m.trips_display) > 0) return Number(m.trips_display);
-      if (Number(m.trips_weighted) > 0) return Number(m.trips_weighted);
-      return Number(m.trips_legs != null ? m.trips_legs : m.trips) || 0;
-    }
-
     function buildingMetricsTooltipHtml(b) {
       const m = normalizeBuildingMetrics(b);
-      const tripsLabel = formatTripsNum(buildingDisplayTrips(m)) + ' trips'
-        + ((Number(m.trips_weighted) > 0 && Number(m.trips_legs || m.trips) === 0) ? ' (expanded)' : '');
       return '<div style="font-size:11px"><strong>Building ' + String(m.building_id) + '</strong><br>'
-        + formatKgCo2e(m.total_emissions_g) + ' kg CO₂e · ' + tripsLabel + ' · '
+        + formatKgCo2e(m.total_emissions_g) + ' kg CO₂e · ' + formatTripsNum(m.trips) + ' trips · '
         + formatDistanceKm(m.total_distance_km) + '<br>'
         + '<span style="color:#5eead4">Click for details</span></div>';
     }
@@ -1730,8 +1195,6 @@
 
     function buildingHasTripActivity(b) {
       if (!b) return false;
-      const weighted = Number(b.trips_weighted);
-      if (Number.isFinite(weighted) && weighted > 0) return true;
       const trips = Number(b.trips != null ? b.trips : b.trips_legs);
       const emis = Number(b.total_emissions_g);
       return (Number.isFinite(trips) && trips > 0) || (Number.isFinite(emis) && emis > 0);
@@ -2064,8 +1527,6 @@
           p.total_emissions_g = b.total_emissions_g;
           p.trips = b.trips;
           p.trips_legs = b.trips_legs;
-          p.trips_weighted = b.trips_weighted;
-          p.trips_display = b.trips_display;
           p.total_distance_km = b.total_distance_km;
           p.in_inventory = true;
         } else {
@@ -2073,7 +1534,6 @@
           p.total_emissions_g = z.total_emissions_g;
           p.trips = z.trips;
           p.trips_legs = z.trips_legs;
-          p.trips_weighted = z.trips_weighted;
           p.total_distance_km = z.total_distance_km;
           if (p.in_inventory == null) p.in_inventory = false;
         }
@@ -2262,6 +1722,7 @@
           renderBuildingLayer(key, vv.payload);
         }
         fitMapViewToContent(key);
+        rescheduleBuildingMapPaint(key);
       }, 120);
     }
 
@@ -2280,7 +1741,7 @@
       renderAllBuildingMaps(false);
     }
 
-    /** Zone choropleth + building footprints on the active building map(s). */
+    /** Grey fabric on buildingHitPane; emissions on buildingEmissionPane (above zones). */
     function renderAllBuildingMaps(refit) {
       if (!IS_BUILDING_PAGE) return;
       const activeKey = activeBuildingViewKey();
@@ -2297,8 +1758,7 @@
         });
         if (refit !== false) {
           fitMapViewToContent(activeKey);
-          const av = mapViews[activeKey];
-          if (av && av.map) av.map.invalidateSize(true);
+          rescheduleBuildingMapPaint(activeKey);
         }
       } else {
         const spec = MAP_SPECS.find(s => s.key === activeKey);
@@ -2312,7 +1772,8 @@
         renderZoneLayer(activeKey, mapViews[activeKey].zonePayload);
         disposeBuildingPointLayer(activeKey);
         disposeBuildingFootprintLayer(activeKey);
-        if (v && v.heatLayer && v.map && v.map.hasLayer(v.heatLayer)) {
+        const v = mapViews[activeKey];
+        if (v.heatLayer && v.map && v.map.hasLayer(v.heatLayer)) {
           v.map.removeLayer(v.heatLayer);
         }
       }
@@ -2355,10 +1816,7 @@
         v.map.removeLayer(v.buildingEmissionLayer);
         v.buildingEmissionLayer = null;
       }
-      if (v.buildingFootprintLayer) {
-        v.map.removeLayer(v.buildingFootprintLayer);
-        v.buildingFootprintLayer = null;
-      }
+      v.buildingFootprintLayer = null;
     }
 
     function attachBuildingFootprintHandlers(layer, feature, viewKey, inventoryById, hasSelection) {
@@ -2398,8 +1856,6 @@
         total_emissions_g: p.total_emissions_g,
         trips: p.trips,
         trips_legs: p.trips_legs,
-        trips_weighted: p.trips_weighted,
-        trips_display: p.trips_display,
         total_distance_km: p.total_distance_km,
         lat: null,
         lon: null,
@@ -2485,13 +1941,18 @@
 
       if (!selectedGeoId) return;
 
+      const countEl = document.getElementById('bldgMapCount');
+      try {
+      v.map.invalidateSize({ animate: false });
+      resetBuildingPaneSvgs(v.map);
+
       const buildings = filterBuildingsToSelectedZone((payload && payload.buildings) ? payload.buildings : [], viewKey);
       const valid = buildings.filter(b => validLatLon(b.lat, b.lon));
-      const countEl = document.getElementById('bldgMapCount');
       const truncated = payload && payload.truncated;
       const footprintFc = payload && payload.footprintFc;
+      const fabricFc = footprintGeoJsonForRender(footprintFc);
 
-      const filteredPayload = { buildings: valid, truncated, footprintFc };
+      const filteredPayload = { buildings: valid, truncated, footprintFc: fabricFc };
       if (buildingHeatEnabled()) {
         renderHeat(viewKey, filteredPayload, true);
       } else if (v.heatLayer && v.map.hasLayer(v.heatLayer)) {
@@ -2499,54 +1960,57 @@
       }
 
       const hasSelection = selectedBuildingId && selectedBuildingMapKey === viewKey;
-      const footprintFeatures = (footprintFc && footprintFc.features && footprintFc.features.length)
-        ? footprintFc.features
-        : [];
+      const inventoryById = {};
+      buildings.forEach(b => {
+        if (b && b.building_id != null) inventoryById[String(b.building_id)] = b;
+      });
+      const footprintFeatures = fabricFc.features || [];
 
       if (footprintFeatures.length) {
-        v.buildingFootprintLayer = L.geoJSON(footprintFc, {
+        v.buildingFabricLayer = L.geoJSON(fabricFc, {
           pane: 'buildingHitPane',
-          filter(feature) {
-            const t = feature.geometry && feature.geometry.type;
-            return t === 'Polygon' || t === 'MultiPolygon';
-          },
+          interactive: true,
+          bubblingMouseEvents: false,
+          className: 'building-footprint-hit',
           style(feature) {
-            const p = normalizeBuildingMetrics(feature.properties || {});
-            const col = buildingEmissionFillColor(p, buildingEmissionScale);
-            const isSel = hasSelection && footprintPartSelected(p);
-            const isSibling = hasSelection && String(p.building_id) === selectedBuildingId && !isSel;
-            return {
-              fillColor: col,
-              fillOpacity: isSel ? 0.88 : (isSibling ? 0.2 : (hasSelection ? 0.45 : 0.72)),
-              color: isSel ? '#5eead4' : '#334155',
-              weight: isSel ? 2.5 : 1.25,
-              opacity: isSibling ? 0.35 : 1,
-            };
+            return buildingFabricBaseStyle(feature.properties, hasSelection);
           },
           onEachFeature(feature, layer) {
-            const b = buildingFromFootprintFeature(feature);
-            if (!b.building_id) return;
-            const c = layer.getBounds && layer.getBounds().isValid && layer.getBounds().isValid()
-              ? layer.getBounds().getCenter()
-              : null;
-            if (c) {
-              b.lat = c.lat;
-              b.lon = c.lng;
-            }
-            layer.options.buildingId = String(b.building_id);
-            layer.on('click', (ev) => {
-              if (ev) L.DomEvent.stopPropagation(ev);
-              if (ev && ev.latlng) {
-                b._clickLat = ev.latlng.lat;
-                b._clickLon = ev.latlng.lng;
-              }
-              selectBuildingMarker(b, viewKey);
-            });
-            if (!(hasSelection && footprintPartSelected(feature.properties))) {
-              layer.bindTooltip(buildingMetricsTooltipHtml(b), buildingTooltipOptions());
-            }
+            attachBuildingFootprintHandlers(layer, feature, viewKey, inventoryById, hasSelection);
           },
         }).addTo(v.map);
+
+        if (!buildingHeatEnabled()) {
+          const emissionFeatures = footprintFeatures.filter(function (f) {
+            return !!buildingEmissionOverlayStyle(
+              f.properties,
+              buildingEmissionScale,
+              inventoryById,
+              hasSelection
+            );
+          });
+          if (emissionFeatures.length) {
+            v.buildingEmissionLayer = L.geoJSON(
+              { type: 'FeatureCollection', features: emissionFeatures },
+              {
+                pane: 'buildingEmissionPane',
+                interactive: false,
+                bubblingMouseEvents: false,
+                className: 'building-emission-overlay',
+                style(feature) {
+                  return buildingEmissionOverlayStyle(
+                    feature.properties,
+                    buildingEmissionScale,
+                    inventoryById,
+                    hasSelection
+                  ) || { fillOpacity: 0, opacity: 0, fill: false, stroke: false };
+                },
+              }
+            ).addTo(v.map);
+          }
+        }
+
+        v.buildingFootprintLayer = v.buildingFabricLayer;
       }
 
       if (!valid.length && !footprintFeatures.length) {
@@ -2575,12 +2039,21 @@
         });
       }
 
-      const nShown = footprintFeatures.length || valid.length;
+      const nFabric = footprintFeatures.length || valid.length;
+      const nInventory = buildings.length;
       if (countEl) {
-        let txt = 'zone ' + selectedGeoId + ': ' + nShown.toLocaleString() + ' buildings';
-        if (truncated) txt += '+';
+        let txt = 'zone ' + selectedGeoId + ': ' + nFabric.toLocaleString() + ' footprints';
+        if (nInventory < nFabric) {
+          txt += ' · ' + nInventory.toLocaleString() + ' in emissions filter';
+        }
+        if (truncated) txt += ' · inventory filter truncated';
         if (payload && payload.fabricTruncated) txt += ' · fabric truncated';
         countEl.textContent = txt;
+      }
+      rescheduleBuildingMapPaint(viewKey);
+      } catch (err) {
+        console.error('renderBuildingLayer:', err);
+        if (countEl) countEl.textContent = 'zone ' + selectedGeoId + ': render error (see console)';
       }
     }
 
@@ -2980,6 +2453,7 @@
       const q = buildMapQuery(minKg, maxKg);
       q.set('building_by', buildingBy || 'rules');
       if (zoneGeoId) q.set('zone_geo_id', String(zoneGeoId));
+      q.set('include_footprints', '0');
       q.set('limit', '50000');
       return q.toString();
     }
@@ -3183,8 +2657,6 @@
       checkDashboardServerCapabilities();
       if (window.DashNav) DashNav.applyStoredAttributionPanels();
       initMaps();
-      signalEmbedMapShellReady();
-      finishEmbedMapPaint();
       if (!IS_EMBED) setKpiLoading(true);
       const motifLimit = (new URLSearchParams(window.location.search).get('motif_limit') || '24').trim() || '24';
       const bootUrl = '/api/od/bootstrap';
@@ -3193,17 +2665,16 @@
         return null;
       });
       const zoneCodesPromise = fetchJson('/api/zone_codes').catch(() => null);
-      const scalePromise = loadBuildingEmissionScale(activeBuildingBy());
-      const zonesPromise = refreshZones().catch(err => {
-        console.error('zone maps:', err);
-        return err;
-      });
       const [, boot, zoneCodes] = await Promise.all([
         loadMontrealBoundary(), bootPromise, zoneCodesPromise,
       ]);
       bootCacheBuildings = boot;
       syncGlobalBuildingScaleFromCache();
-      await scalePromise;
+      await loadBuildingEmissionScale(activeBuildingBy());
+      const zonesPromise = refreshZones().catch(err => {
+        console.error('zone maps:', err);
+        return err;
+      });
 
       try {
         const zcMap = (boot && boot.zone_codes) || (zoneCodes && zoneCodes.zone_codes);
@@ -3253,6 +2724,8 @@
             },
           });
         }
+        signalEmbedMapShellReady();
+        finishEmbedMapPaint();
         renderAllBuildingMaps(false);
 
         const heatToggle = document.getElementById('heatToggle');
@@ -3335,6 +2808,4 @@
       }
     }
     load();
-  </script>
-</body>
-</html>
+  
