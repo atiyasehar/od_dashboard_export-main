@@ -35,8 +35,20 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from sqlalchemy import text  # noqa: E402
 
-import db_utils  # noqa: E402
 from od_table_names import apply_run_tag  # noqa: E402
+
+
+def _import_db_utils():
+    """Pack-only helper (PopGen source tree). Unpack uses pg_restore and does not need this."""
+    try:
+        import db_utils  # noqa: WPS433
+
+        return db_utils
+    except ImportError as exc:
+        raise SystemExit(
+            "pack requires scripts/db_utils.py from the PopGen2023 repo.\n"
+            "On a target machine, restore with: python scripts/bundle_od_dashboard.py unpack ..."
+        ) from exc
 
 _SCRIPTS_DIR = Path(__file__).resolve().parent
 _CANDIDATE_BUNDLE = _SCRIPTS_DIR.parent
@@ -125,6 +137,7 @@ OPTIONAL_TABLES = ("building_jobs",)
 
 
 def _apply_conn_config(args) -> None:
+    db_utils = _import_db_utils()
     host = str(args.host)
     port = str(int(args.port))
     user = str(args.user)
@@ -200,39 +213,39 @@ def _run(cmd: list[str], *, env: dict | None = None, check: bool = True) -> subp
     return subprocess.run(cmd, env=env, check=check)
 
 
-def _table_exists(conn, table: str) -> bool:
+def _table_exists(conn, table: str, *, schema: str) -> bool:
     return bool(
         conn.execute(
             text(
                 "SELECT 1 FROM information_schema.tables "
                 "WHERE table_schema=:s AND table_name=:t LIMIT 1"
             ),
-            {"s": db_utils.DB_SCHEMA, "t": table},
+            {"s": schema, "t": table},
         ).first()
     )
 
 
-def _resolve_pack_tables(conn, *, include_building_jobs: bool) -> list[str]:
+def _resolve_pack_tables(conn, *, include_building_jobs: bool, schema: str) -> list[str]:
     tables = list(CORE_TABLES)
-    if _table_exists(conn, ZONE_UNIFIED):
+    if _table_exists(conn, ZONE_UNIFIED, schema=schema):
         tables.append(ZONE_UNIFIED)
     else:
-        missing = [t for t in (ZONE_RULES, ZONE_DEST) if not _table_exists(conn, t)]
+        missing = [t for t in (ZONE_RULES, ZONE_DEST) if not _table_exists(conn, t, schema=schema)]
         if missing:
             raise SystemExit(
                 "Missing OD zone emissions table(s). Need either "
-                f"{db_utils.DB_SCHEMA}.{ZONE_UNIFIED} or both "
+                f"{schema}.{ZONE_UNIFIED} or both "
                 f"{ZONE_RULES} and {ZONE_DEST}.\n"
                 "Run: python scripts/preprocess_dashboard_od10_zone_emissions.py"
             )
         tables.extend([ZONE_RULES, ZONE_DEST])
-    if include_building_jobs and _table_exists(conn, "building_jobs"):
+    if include_building_jobs and _table_exists(conn, "building_jobs", schema=schema):
         tables.append("building_jobs")
-    missing_core = [t for t in CORE_TABLES if not _table_exists(conn, t)]
+    missing_core = [t for t in CORE_TABLES if not _table_exists(conn, t, schema=schema)]
     if missing_core:
         raise SystemExit(
             "Missing required table(s):\n  "
-            + "\n  ".join(f"{db_utils.DB_SCHEMA}.{t}" for t in missing_core)
+            + "\n  ".join(f"{schema}.{t}" for t in missing_core)
             + "\n\nBuild OD dashboard precomputes first, then run pack again."
         )
     return tables
@@ -337,6 +350,7 @@ Portable folder for the PM23 survey dashboard (`run_dashboard.py`).
 
 
 def cmd_pack(args) -> int:
+    db_utils = _import_db_utils()
     _apply_conn_config(args)
     out_dir = Path(args.out_dir).resolve() if args.out_dir else DEFAULT_BUNDLE_ROOT
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -346,13 +360,16 @@ def cmd_pack(args) -> int:
     print(f"  -> {out_dir}", flush=True)
 
     engine = db_utils.get_engine()
+    schema = db_utils.DB_SCHEMA
     with engine.connect() as conn:
-        tables = _resolve_pack_tables(conn, include_building_jobs=args.include_building_jobs)
+        tables = _resolve_pack_tables(
+            conn, include_building_jobs=args.include_building_jobs, schema=schema
+        )
         counts: dict[str, int] = {}
         for t in tables:
-            n = conn.execute(text(f'SELECT COUNT(*) FROM "{db_utils.DB_SCHEMA}"."{t}"')).scalar()
+            n = conn.execute(text(f'SELECT COUNT(*) FROM "{schema}"."{t}"')).scalar()
             counts[t] = int(n or 0)
-            print(f"  {db_utils.DB_SCHEMA}.{t}: {counts[t]:,} rows", flush=True)
+            print(f"  {schema}.{t}: {counts[t]:,} rows", flush=True)
 
     pg_dump = _find_pg_tool("pg_dump")
     conn_args = _pg_conn_args(args)
@@ -371,10 +388,10 @@ def cmd_pack(args) -> int:
         "--no-owner",
         "--no-acl",
         "-f", str(dump_path),
-        "-n", db_utils.DB_SCHEMA,
+        "-n", schema,
     ]
     for t in tables:
-        cmd.extend(["-t", f"{db_utils.DB_SCHEMA}.{t}"])
+        cmd.extend(["-t", f"{schema}.{t}"])
     print(f"Writing {dump_path} ...", flush=True)
     _run(cmd, env=env)
 
@@ -387,9 +404,9 @@ def cmd_pack(args) -> int:
     manifest = {
         "bundle_type": "od_dashboard",
         "run_tag": RUN_TAG,
-        "schema": db_utils.DB_SCHEMA,
+        "schema": schema,
         "dbname": conn_args["dbname"],
-        "tables": [f"{db_utils.DB_SCHEMA}.{t}" for t in tables],
+        "tables": [f"{schema}.{t}" for t in tables],
         "row_counts": counts,
         "zone_table_mode": "unified" if ZONE_UNIFIED in tables else "split",
         "boundaries": boundaries,

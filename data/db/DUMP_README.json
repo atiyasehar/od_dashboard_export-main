@@ -7,6 +7,7 @@
   "database_name": "od_dashboard",
   "schema": "public",
   "restore_steps": {
+    "0_configure": "Copy deploy.example.env to deploy.env in the project root and set PGHOST, PGPORT, PGUSER, PGPASSWORD",
     "1_create_database": "pgAdmin → Create Database → name: od_dashboard",
     "2_prepare_schema_sql": [
       "DROP SCHEMA IF EXISTS public CASCADE;",

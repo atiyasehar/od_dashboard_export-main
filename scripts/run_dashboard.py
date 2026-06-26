@@ -106,6 +106,42 @@ def _apply_db_cli(
     _dashboard_server.DB_PARAMS.update(DB_PARAMS)
 
 
+def _load_deploy_env(path: Path, *, override: bool = False) -> None:
+    """Load KEY=VALUE lines into os.environ (for local deploy.env / .env files)."""
+    if not path.is_file():
+        return
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.lower().startswith("export "):
+            line = line[7:].strip()
+        if "=" not in line:
+            continue
+        key, _, val = line.partition("=")
+        key = key.strip()
+        val = val.strip().strip('"').strip("'")
+        if not key or not val:
+            continue
+        if override or key not in os.environ:
+            os.environ[key] = val
+
+
+def _load_default_deploy_env(bundle_root: Path | None = None) -> None:
+    roots: list[Path] = []
+    if bundle_root:
+        roots.append(bundle_root)
+    roots.append(Path(__file__).resolve().parent.parent)
+    seen: set[Path] = set()
+    for root in roots:
+        root = root.resolve()
+        if root in seen:
+            continue
+        seen.add(root)
+        for name in ("deploy.env", ".env"):
+            _load_deploy_env(root / name)
+
+
 def _data_dir() -> Path:
     return _dashboard_server.REPO_DATA_DIR
 
@@ -2639,7 +2675,25 @@ def static_file(path):
 
 
 if __name__ == "__main__":
+    _repo_root = Path(__file__).resolve().parent.parent
+    _load_default_deploy_env(_repo_root)
+
+    _pre = argparse.ArgumentParser(add_help=False)
+    _pre.add_argument("--env-file", default=os.environ.get("DASH_ENV_FILE", ""))
+    _pre.add_argument("--bundle-root", default=os.environ.get("POPGEN_BUNDLE_ROOT"))
+    _pre_args, _ = _pre.parse_known_args()
+    if _pre_args.env_file:
+        _load_deploy_env(Path(_pre_args.env_file).expanduser().resolve(), override=True)
+    _bundle_hint = _resolve_bundle_root(_pre_args.bundle_root) if _pre_args.bundle_root else _resolve_bundle_root()
+    if _bundle_hint and _bundle_hint != _repo_root:
+        _load_default_deploy_env(_bundle_hint)
+
     ap = argparse.ArgumentParser(description="PopGen emissions dashboard API server")
+    ap.add_argument(
+        "--env-file",
+        default=_pre_args.env_file or "",
+        help="Optional deploy.env file (KEY=VALUE). Also auto-loads deploy.env or .env from bundle root.",
+    )
     ap.add_argument("--host", default="0.0.0.0", help="Bind address (default: 0.0.0.0)")
     ap.add_argument(
         "--port",

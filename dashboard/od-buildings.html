@@ -1580,8 +1580,12 @@
       updateEmissionScales();
     }
 
+    /** Building CO₂ in kg (up to 2 decimal places). */
     function formatKgCo2e(emissionsG) {
-      return Math.round((Number(emissionsG) || 0) / 1000).toLocaleString();
+      const g = Number(emissionsG);
+      if (!Number.isFinite(g) || g === 0) return '0';
+      const kg = g / 1000;
+      return kg.toLocaleString(undefined, { maximumFractionDigits: 2, minimumFractionDigits: 0 });
     }
     function totalEmissionsKg(statsOrG) {
       if (statsOrG && typeof statsOrG === 'object') {

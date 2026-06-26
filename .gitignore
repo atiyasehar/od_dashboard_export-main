@@ -10,6 +10,7 @@ env/
 # Secrets / local config
 .env
 .env.*
+deploy.env
 *.pem
 
 # OS / editor
