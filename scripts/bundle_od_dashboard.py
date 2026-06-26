@@ -85,6 +85,9 @@ DASHBOARD_PAGES = (
 )
 
 DASHBOARD_ASSETS = (
+    "assets/dashboard-config.js",
+    "assets/dashboard-offline.css",
+    "assets/dashboard-map-basemap.js",
     "assets/dashboard-spa-od.js",
     "assets/dashboard-host-od.js",
     "assets/dashboard-nav.js",
@@ -101,6 +104,19 @@ DASHBOARD_ASSETS = (
     "assets/loading-complete-static.jpg",
     "assets/original/gif-loading1.gif",
     "assets/original/loading-complete.gif",
+)
+
+VENDOR_ASSETS = (
+    "assets/vendor/leaflet.css",
+    "assets/vendor/leaflet.js",
+    "assets/vendor/leaflet-heat.js",
+    "assets/vendor/chart.umd.min.js",
+    "assets/vendor/chartjs-plugin-datalabels.min.js",
+    "assets/vendor/images/layers.png",
+    "assets/vendor/images/layers-2x.png",
+    "assets/vendor/images/marker-icon.png",
+    "assets/vendor/images/marker-icon-2x.png",
+    "assets/vendor/images/marker-shadow.png",
 )
 
 BOUNDARY_FILES = (
@@ -262,7 +278,7 @@ def _copy_dashboard(out_dir: Path) -> None:
         if not src.is_file():
             raise SystemExit(f"Missing dashboard page: {src}")
         shutil.copy2(src, dash_dir / page)
-    for rel in DASHBOARD_ASSETS:
+    for rel in DASHBOARD_ASSETS + VENDOR_ASSETS:
         src = src_root / rel
         if not src.is_file():
             raise SystemExit(f"Missing dashboard asset: {src}")

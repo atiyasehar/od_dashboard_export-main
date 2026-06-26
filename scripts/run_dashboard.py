@@ -19,6 +19,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 import traceback
 from functools import wraps
@@ -503,6 +504,7 @@ DEPLOY = {
     "url_prefix": "",
     "api_prefix": "/api",
     "show_boundary_button": True,
+    "offline": False,
 }
 _DEPLOY_CONFIGURED = False
 
@@ -579,6 +581,7 @@ def configure_deployment(
     url_prefix: str | None = None,
     api_prefix: str | None = None,
     show_boundary_button: bool | None = None,
+    offline: bool | None = None,
 ) -> None:
     """Apply URL/API mount prefixes and optional UI flags (safe to call once at startup)."""
     global DEPLOY, _DEPLOY_CONFIGURED
@@ -588,6 +591,7 @@ def configure_deployment(
         "show_boundary_button": (
             DEPLOY["show_boundary_button"] if show_boundary_button is None else bool(show_boundary_button)
         ),
+        "offline": DEPLOY["offline"] if offline is None else bool(offline),
     }
     if _DEPLOY_CONFIGURED:
         return
@@ -819,6 +823,7 @@ def api_health():
             "api_prefix": ap,
             "api_base": f"{up}{ap}" if up or ap else "/api",
             "show_boundary_button": DEPLOY["show_boundary_button"],
+            "offline": DEPLOY["offline"],
         },
     })
 
@@ -2543,6 +2548,7 @@ def _deploy_cfg_dict() -> dict:
         "apiPrefix": ap,
         "apiBase": api_base,
         "showBoundaryButton": DEPLOY["show_boundary_button"],
+        "offline": DEPLOY["offline"],
     }
 
 
@@ -2552,12 +2558,44 @@ def _deploy_inline_script() -> str:
     return f"<script>window.__dashDeploy={cfg};</script>\n  "
 
 
+def _rewrite_html_for_offline(html: str) -> str:
+    """Swap CDN assets for bundled vendor files; drop Google Fonts."""
+    html = re.sub(r"\s*<link[^>]*fonts\.(googleapis|gstatic)\.com[^>]*>\s*", "\n", html, flags=re.I)
+    replacements = (
+        ("https://unpkg.com/leaflet@1.9.4/dist/leaflet.css", "assets/vendor/leaflet.css"),
+        ("https://unpkg.com/leaflet@1.9.4/dist/leaflet.js", "assets/vendor/leaflet.js"),
+        (
+            "https://cdn.jsdelivr.net/npm/leaflet.heat@0.2.0/dist/leaflet-heat.js",
+            "assets/vendor/leaflet-heat.js",
+        ),
+        (
+            "https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js",
+            "assets/vendor/chart.umd.min.js",
+        ),
+        (
+            "https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.2.0",
+            "assets/vendor/chartjs-plugin-datalabels.min.js",
+        ),
+    )
+    for old, new in replacements:
+        html = html.replace(old, new)
+    if "dashboard-offline.css" not in html:
+        html = html.replace(
+            "<head>",
+            '<head>\n  <link rel="stylesheet" href="assets/dashboard-offline.css" />',
+            1,
+        )
+    return html
+
+
 def _serve_html_page(filename: str):
     """Serve dashboard HTML with runtime deploy settings inlined (NGCI / subpath safe)."""
     path = Path(app.static_folder) / filename
     if not path.is_file():
         return f"<p>{filename} not found.</p>", 404
     html = path.read_text(encoding="utf-8")
+    if DEPLOY["offline"]:
+        html = _rewrite_html_for_offline(html)
     inject = _deploy_inline_script()
     marker = '<script src="assets/dashboard-config.js'
     if marker in html and "__dashDeploy" not in html:
@@ -2733,6 +2771,13 @@ if __name__ == "__main__":
         metavar="BOOL",
         help="Show Boundaries nav link (default: true). Pass false to hide.",
     )
+    ap.add_argument(
+        "--offline",
+        default=_str_to_bool(os.environ.get("DASH_OFFLINE", "false")),
+        type=_str_to_bool,
+        metavar="BOOL",
+        help="Offline mode: bundled JS/CSS, no CDN fonts or map tiles (default: false).",
+    )
     args = ap.parse_args()
     if args.bundle_root:
         bundle_root = _resolve_bundle_root(str(args.bundle_root))
@@ -2744,6 +2789,7 @@ if __name__ == "__main__":
         url_prefix=args.url_prefix,
         api_prefix=args.api_prefix,
         show_boundary_button=args.show_boundary_button,
+        offline=args.offline,
     )
     _apply_db_cli(
         db_host=args.db_host,
@@ -2761,6 +2807,7 @@ if __name__ == "__main__":
     print(f"  URL prefix: {up or '(root)'}")
     print(f"  API prefix: {ap}")
     print(f"  Boundaries nav: {'on' if DEPLOY['show_boundary_button'] else 'off'}")
+    print(f"  Offline mode: {'on' if DEPLOY['offline'] else 'off'}")
     print(
         f"  DB: {DB_PARAMS.get('user', '(default)')}@{DB_PARAMS.get('host', 'localhost')}:"
         f"{DB_PARAMS.get('port', '5432')}/{DB_PARAMS.get('dbname', 'od_dashboard')} schema={SCHEMA}"

@@ -392,6 +392,7 @@
 
   <script src="assets/dashboard-nav.js?v=17"></script>
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="assets/dashboard-map-basemap.js"></script>
   <script>
     const IS_EMBED = !!(window.DashEmbed && DashEmbed.isEmbed);
     const CACHE_TTL_MS = 60 * 60 * 1000;
@@ -607,7 +608,7 @@
     function initMap() {
       if (map) return map;
       if (typeof L === 'undefined') {
-        throw new Error('Leaflet did not load (check network / unpkg.com).');
+        throw new Error('Leaflet did not load (check network or enable offline mode).');
       }
       map = L.map('map', { preferCanvas: true }).setView([45.52, -73.68], 10);
       map.createPane('zoneBgPane');
@@ -620,11 +621,7 @@
       map.createPane('flowLabelPane');
       map.getPane('flowLabelPane').style.zIndex = 720;
       map.getPane('flowLabelPane').style.pointerEvents = 'none';
-      L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
-        attribution: '&copy; OpenStreetMap &copy; CARTO',
-        subdomains: 'abcd',
-        maxZoom: 20,
-      }).addTo(map);
+      DashMapBasemap.addTo(map, 'light_all');
       flowArcLayer = L.layerGroup().addTo(map);
       flowLabelLayer = L.layerGroup().addTo(map);
       map.fitBounds([[45.38, -74.0], [45.68, -73.35]], { animate: false });

@@ -16,6 +16,7 @@
   <script src="assets/dashboard-embed.js?v=1"></script>
   <script src="assets/loading-overlay.js?v=11"></script>
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="assets/dashboard-map-basemap.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/leaflet.heat@0.2.0/dist/leaflet-heat.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.2.0"></script>
@@ -816,9 +817,7 @@
       m.createPane('zoneBgPane'); m.getPane('zoneBgPane').style.zIndex = 405;
       m.createPane('heatPane'); m.getPane('heatPane').style.zIndex = 410;
       m.createPane('zonePane'); m.getPane('zonePane').style.zIndex = 430;
-      L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
-        attribution: '&copy; OpenStreetMap &copy; CARTO', subdomains: 'abcd', maxZoom: 20,
-      }).addTo(m);
+      DashMapBasemap.addTo(m, 'light_all');
       m.fitBounds([[45.38, -74.0], [45.68, -73.35]], { animate: false });
       return { ...spec, map: m, zoneLayer: null, zoneLabelLayer: null, heatLayer: null, boundaryLayer: null, zonesBoundaryLayer: null, payload: { zones: [], geojson: null } };
     }

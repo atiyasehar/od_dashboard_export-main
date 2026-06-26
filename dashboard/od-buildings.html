@@ -18,6 +18,7 @@
   <script src="assets/dashboard-zone-ui.js?v=20"></script>
   <script src="assets/loading-overlay.js?v=11"></script>
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="assets/dashboard-map-basemap.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/leaflet.heat@0.2.0/dist/leaflet-heat.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.2.0"></script>
@@ -2823,13 +2824,10 @@
         m.createPane('flowPane');
         m.getPane('flowPane').style.zIndex = 650;
       }
-      L.tileLayer('https://{s}.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}{r}.png', {
-        attribution: '&copy; OpenStreetMap &copy; CARTO',
-        subdomains: 'abcd',
-        maxZoom: 20,
+      DashMapBasemap.addTo(m, 'light_nolabels', {
         keepBuffer: 4,
         updateWhenZooming: false,
-      }).addTo(m);
+      });
       m.fitBounds([[45.38, -74.0], [45.68, -73.35]], { animate: false });
       return {
         ...spec,

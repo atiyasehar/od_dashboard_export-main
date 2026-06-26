@@ -12,7 +12,7 @@ Portable **PM23 survey** dashboard — CMM island-eligible car trips, zone maps,
 
 Table row counts and bundle metadata: **`manifest.json`**.
 
-**All connection settings** (HTTP port, PostgreSQL host/port/user/password, URL prefixes) are configured in **`deploy.env`** — see [Configuration reference](#configuration-reference). The README never assumes a specific port on your machine.
+**All connection settings** (HTTP port, PostgreSQL host/port/user/password, URL prefixes, offline mode) are configured in **`deploy.env`** — see [Configuration reference](#configuration-reference) and [Offline / air-gapped deployment](#offline--air-gapped-deployment). The README never assumes a specific port on your machine.
 
 ---
 
@@ -26,6 +26,7 @@ Replace values in **`deploy.env`** first (`cp` or `copy deploy.example.env deplo
 # 1. Config
 copy deploy.example.env deploy.env
 # Edit deploy.env in your editor (PORT, PGHOST, PGPORT, PGUSER, PGPASSWORD, PGDATABASE, PGSCHEMA)
+# Optional: DASH_OFFLINE=true for air-gapped deploy (no CDN or map tiles)
 
 # 2. Python
 python -m venv .venv
@@ -78,6 +79,7 @@ python scripts/run_dashboard.py --bundle-root .
 # 1. Config
 cp deploy.example.env deploy.env
 # Edit deploy.env (PORT, PGHOST, PGPORT, PGUSER, PGPASSWORD, PGDATABASE, PGSCHEMA)
+# Optional: DASH_OFFLINE=true for air-gapped deploy (no CDN or map tiles)
 
 # 2. Python
 python3 -m venv .venv
@@ -147,7 +149,7 @@ Get-NetTCPConnection -LocalPort $env:PORT -State Listen | ForEach-Object {
 | **Python 3.10+** | `python -m venv .venv` recommended |
 | **PostgreSQL 14+** | With **PostGIS** extension |
 | **`pg_restore` / `psql`** | On `PATH`, or set `PG_BIN` in `deploy.env` |
-| **Internet** | Map tiles and CDN libraries (Leaflet, Chart.js) |
+| **Internet** | Optional — set `DASH_OFFLINE=true` for air-gapped deploy (bundled JS/CSS, no map tiles) |
 
 ### 2. Get the code and database dump
 
@@ -183,8 +185,11 @@ Edit **`deploy.env`** and set at least:
 | `PGPASSWORD` | PostgreSQL password |
 | `PGDATABASE` | Database name (default `od_dashboard`) |
 | `PGSCHEMA` | Schema with restored tables (default `public`) |
+| `DASH_OFFLINE` | `true` for air-gapped deploy; omit or `false` for online (default) |
 
-Optional: `DASH_URL_PREFIX`, `DASH_API_PREFIX`, `DASH_SHOW_BOUNDARY_BUTTON`, `PG_BIN`.
+Optional: `DASH_URL_PREFIX`, `DASH_API_PREFIX`, `DASH_SHOW_BOUNDARY_BUTTON`, `DASH_OFFLINE`, `PG_BIN`.
+
+Set **`DASH_OFFLINE=true`** when the target machine has no internet or blocks CDNs and map tile hosts. See [Offline / air-gapped deployment](#offline--air-gapped-deployment).
 
 `deploy.env` is **git-ignored**. The server and start scripts load it automatically.
 
@@ -329,6 +334,7 @@ Expected:
 - `"ok": true`
 - `"db_port"` matches **`PGPORT`** in your `deploy.env`
 - `"schema"` matches **`PGSCHEMA`**
+- `"deploy"."offline"` is `true` when `DASH_OFFLINE=true`
 - `building_emissions` shows ~924k rows
 
 Verify tables (in `psql`, using your connection variables):
@@ -375,6 +381,9 @@ All settings: **`deploy.env`**, environment variables, or CLI flags on `run_dash
 | URL mount prefix | `DASH_URL_PREFIX` | `--url-prefix` |
 | API prefix | `DASH_API_PREFIX` | `--api-prefix` |
 | Show Boundaries nav | `DASH_SHOW_BOUNDARY_BUTTON` | `--show-boundary-button` |
+| Offline / air-gapped | `DASH_OFFLINE` | `--offline` |
+
+See [Offline / air-gapped deployment](#offline--air-gapped-deployment) for full details.
 
 Example behind NGINX (set prefixes in `deploy.env` or flags):
 
@@ -405,11 +414,100 @@ Health URL pattern: `https://your-host<url-prefix><api-prefix>/health`
 
 ---
 
+## Offline / air-gapped deployment
+
+Use offline mode when the dashboard runs on a machine **without internet access**, or when outbound HTTP to CDNs and map tile servers is blocked. The UI still talks to **your local PostgreSQL**; only external assets are removed.
+
+### Enable
+
+In **`deploy.env`**:
+
+```env
+DASH_OFFLINE=true
+```
+
+Or pass on the CLI (overrides env):
+
+```bash
+python scripts/run_dashboard.py --bundle-root . --offline true
+```
+
+Restart after changing the setting. The start scripts (`start_dashboard.ps1` / `start_dashboard.sh`) load `deploy.env` automatically.
+
+### Online vs offline
+
+| | Online (default) | Offline (`DASH_OFFLINE=true`) |
+|--|------------------|-------------------------------|
+| **Leaflet / Chart.js** | Loaded from unpkg / jsDelivr CDN | Bundled in `dashboard/assets/vendor/` |
+| **Fonts** | Google Fonts (DM Sans, Outfit) | System UI fonts |
+| **Map basemap** | Carto/OSM raster tiles | Dark grid background (no tile requests) |
+| **Zone / building / flow layers** | Yes | Yes (same API data from PostgreSQL) |
+| **Charts (dashboard, buildings)** | Yes | Yes |
+| **Internet required for UI** | Yes (after first load, tiles refresh) | No |
+
+Maps in offline mode show a plain grid behind zone polygons, building footprints, and flow arcs. All interactive features that depend on the database still work.
+
+### What the server does
+
+When offline is on, `run_dashboard.py`:
+
+1. Rewrites HTML responses to swap CDN URLs for local vendor files.
+2. Strips Google Fonts `<link>` tags and injects `dashboard/assets/dashboard-offline.css`.
+3. Injects `offline: true` into the runtime deploy config (`__dashDeploy` / `/api/health`).
+4. Map pages call `DashMapBasemap.addTo()` which skips Carto tiles when offline.
+
+Bundled vendor files (included in the repo and in pack bundles):
+
+- `dashboard/assets/vendor/leaflet.css`, `leaflet.js`, `leaflet-heat.js`
+- `dashboard/assets/vendor/chart.umd.min.js`, `chartjs-plugin-datalabels.min.js`
+- `dashboard/assets/vendor/images/` (Leaflet marker/layer icons)
+- `dashboard/assets/dashboard-map-basemap.js`, `dashboard-offline.css`
+
+### Verify offline mode
+
+**1. Startup log** should include:
+
+```text
+Offline mode: on
+```
+
+**2. Health endpoint** (replace `<PORT>` with your `PORT`):
+
+```powershell
+Invoke-RestMethod "http://127.0.0.1:<PORT>/api/health" | Select-Object -ExpandProperty deploy
+```
+
+```bash
+curl -s "http://127.0.0.1:${PORT}/api/health" | python3 -c "import sys,json; print(json.load(sys.stdin)['deploy'])"
+```
+
+Expected: `"offline": true`.
+
+**3. Browser** — open a map page, hard refresh (Ctrl+Shift+R), then check DevTools → Network:
+
+- No requests to `unpkg.com`, `cdn.jsdelivr.net`, `fonts.googleapis.com`, or `basemaps.cartocdn.com`
+- Scripts load from `/assets/vendor/...` on your server
+- Map canvas shows a dark grid; zones and buildings still appear when selected
+
+**4. Optional air-gap test** — disconnect from the network (or block outbound HTTP), reload the dashboard. Pages should load; only the basemap stays as the grid (by design).
+
+### When to stay online
+
+Keep the default (`DASH_OFFLINE` unset or `false`) if you want:
+
+- Street-style Carto basemap tiles
+- Google Fonts typography matching the design preview
+
+Online mode is fine for most local development and deployments with normal internet access.
+
+---
+
 ## What is in the bundle
 
 | Path | Purpose |
 |------|---------|
 | `dashboard/` | HTML / JS / CSS (zone maps, buildings, flows) |
+| `dashboard/assets/vendor/` | Bundled Leaflet, Chart.js, icons (for offline mode) |
 | `scripts/run_dashboard.py` | Flask API server (**use this to run**) |
 | `data/db/od_dashboard_tables.dump` | PostgreSQL dump (you provide if not in repo) |
 | `data/mtl_boundary_file.geojson` | Island outline for maps (optional but bundled) |
@@ -425,9 +523,10 @@ Health URL pattern: `https://your-host<url-prefix><api-prefix>/health`
 
 1. Copy the whole project folder (include `data/db/od_dashboard_tables.dump` or download on target).
 2. Copy `deploy.example.env` → `deploy.env` and set **that machine’s** `PGHOST`, `PGPORT`, `PGUSER`, `PGPASSWORD`, `PORT`.
-3. Restore the dump (step 5 above).
-4. `pip install -r requirements.txt` and `./scripts/start_dashboard.sh` or `.\scripts\start_dashboard.ps1`.
-5. Confirm `/api/health` shows `"ok": true` and `"db_port"` matches your `PGPORT`.
+3. If the target has **no internet**, set `DASH_OFFLINE=true` in `deploy.env` (vendor assets are in the repo).
+4. Restore the dump (step 5 above).
+5. `pip install -r requirements.txt` and `./scripts/start_dashboard.sh` or `.\scripts\start_dashboard.ps1`.
+6. Confirm `/api/health` shows `"ok": true`, `"db_port"` matches your `PGPORT`, and `"deploy"."offline"` is `true` when offline is enabled.
 
 ---
 
@@ -474,6 +573,8 @@ Update `manifest.json` `created_at` after re-dumping.
 | Building CO₂ shows 0 | Old dump or wrong table | Health → `building_emissions.rows` ≈ 924757 |
 | UI looks outdated | Browser cache | Hard refresh (Ctrl+Shift+R) |
 | `Address already in use` | Another process on your `PORT` | Change `PORT` in `deploy.env` or stop the other process |
+| Blank map background | Offline mode or no network | Expected with `DASH_OFFLINE=true`; zones/buildings still render. Online mode needs Carto tile access |
+| Leaflet/Chart failed to load | CDN blocked, offline not enabled | Set `DASH_OFFLINE=true` in `deploy.env` and restart |
 | Opened HTML as `file://` | Not using Flask | Use `http://127.0.0.1:<PORT>/...` |
 
 **Free your HTTP port** (replace `<PORT>` with `PORT` from `deploy.env`):
@@ -500,6 +601,7 @@ Get-NetTCPConnection -LocalPort $env:PORT -State Listen | ForEach-Object {
 - `dashboard/` — SPA + map views
 - `scripts/run_dashboard.py` — API server
 - `scripts/start_dashboard.ps1` / `start_dashboard.sh` — load `deploy.env` and run
+- `dashboard/assets/vendor/` — offline Leaflet/Chart.js bundles
 - `data/db/` — dump location
 - `docs/screenshots/` — README figures
 

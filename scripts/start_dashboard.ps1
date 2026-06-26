@@ -15,7 +15,7 @@ if (Test-Path $EnvFile) {
     }
     Write-Host "Loaded $EnvFile"
 } else {
-    Write-Host "No deploy.env found — copy deploy.example.env to deploy.env and edit PostgreSQL settings."
+    Write-Host "No deploy.env found - copy deploy.example.env to deploy.env and edit PostgreSQL settings."
 }
 
 python scripts/run_dashboard.py --bundle-root . @args

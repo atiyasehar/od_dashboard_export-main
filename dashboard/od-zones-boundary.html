@@ -187,6 +187,7 @@
 
   <script src="assets/dashboard-config.js?v=3"></script>
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="assets/dashboard-map-basemap.js"></script>
   <script src="assets/loading-overlay.js?v=11"></script>
   <script src="assets/dashboard-nav.js?v=17"></script>
   <script src="assets/dashboard-zone-ui.js?v=20"></script>
@@ -220,10 +221,7 @@
     }
 
     var map = L.map('map', { zoomControl: true, preferCanvas: true });
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
-      attribution: '&copy; OSM &copy; CARTO',
-      maxZoom: 19
-    }).addTo(map);
+    DashMapBasemap.addTo(map, 'dark_all', { maxZoom: 19 });
 
     var boundaryLayer = null;
     var islandLayer = null;
