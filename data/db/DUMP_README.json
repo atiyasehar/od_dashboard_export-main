@@ -1,8 +1,8 @@
 {
   "dump_file": "data/db/od_dashboard_tables.dump",
   "dump_distribution": "OneDrive (not included in Git repository); also PopGen2023/Data/db/od_dashboard_tables.zip",
-  "dump_download_url": "https://liveconcordia-my.sharepoint.com/:u:/g/personal/atiya_atiya_concordia_ca/IQDAgc05pD40SK9YSnDwFZURAcydIl6xbQHGRnafPX5VfIE?e=j6PxkO",
-  "dump_size_mb_approx": 238,
+  "dump_download_url": "https://liveconcordia-my.sharepoint.com/:u:/g/personal/atiya_atiya_concordia_ca/IQAJ5sS0VwhdQ5SYtKaw-8g3AS9G0yONvl3tR7gfnXT7eIQ?e=H5WVeD",
+  "dump_size_mb_approx": 239,
   "dump_filename": "od_dashboard_tables.dump",
   "database_name": "od_dashboard",
   "schema": "public",
@@ -37,14 +37,25 @@
     "4_verify": "SELECT table_schema, table_name FROM information_schema.tables WHERE table_schema = 'public' ORDER BY table_name;"
   },
   "tables": [
-    "popgen_zones_geom",
-    "zone_emissions_od10",
-    "zone_incoming_flows_od10",
-    "zone_flow_anchors_od10",
-    "zone_emissions_categories_od10",
     "building_emissions_od10",
     "buildings_footprint",
-    "trips_route_emissions"
+    "geo_id_zone_map",
+    "zones_geom",
+    "trips_route_emissions",
+    "zone_emissions_categories_od10",
+    "zone_emissions_od10",
+    "zone_flow_anchors_od10",
+    "zone_incoming_flows_od10",
+    "spatial_ref_sys"
+  ],
+  "views": [
+    "popgen_zones_geom",
+    "v_geo_id_ct",
+    "v_buildings_ct",
+    "v_building_emissions_ct",
+    "v_ct_zone_emissions_od10",
+    "v_ct_trip_reconciliation",
+    "v_ct_zones_geom"
   ],
   "building_emissions_rows_approx": 924757,
   "building_emissions_note": "Capacity-allocated expanded trips (trips_weighted_rules/dest); UI shows weighted totals, not leg counts"

@@ -4,24 +4,37 @@
   "schema": "public",
   "dbname": "od_dashboard",
   "tables": [
-    "public.popgen_zones_geom",
-    "public.zone_incoming_flows_od10",
-    "public.zone_flow_anchors_od10",
-    "public.zone_emissions_categories_od10",
-    "public.buildings_footprint",
     "public.building_emissions_od10",
+    "public.buildings_footprint",
+    "public.geo_id_zone_map",
+    "public.zones_geom",
     "public.trips_route_emissions",
-    "public.zone_emissions_od10"
+    "public.zone_emissions_categories_od10",
+    "public.zone_emissions_od10",
+    "public.zone_flow_anchors_od10",
+    "public.zone_incoming_flows_od10",
+    "public.spatial_ref_sys"
+  ],
+  "views": [
+    "public.popgen_zones_geom",
+    "public.v_geo_id_ct",
+    "public.v_buildings_ct",
+    "public.v_building_emissions_ct",
+    "public.v_ct_zone_emissions_od10",
+    "public.v_ct_trip_reconciliation",
+    "public.v_ct_zones_geom"
   ],
   "row_counts": {
-    "popgen_zones_geom": 1074,
-    "zone_incoming_flows_od10": 99436,
-    "zone_flow_anchors_od10": 1074,
-    "zone_emissions_categories_od10": 10,
-    "buildings_footprint": 927307,
     "building_emissions_od10": 924757,
+    "buildings_footprint": 927535,
+    "geo_id_zone_map": 1074,
+    "zones_geom": 1074,
     "trips_route_emissions": 116929,
-    "zone_emissions_od10": 938
+    "zone_emissions_categories_od10": 10,
+    "zone_emissions_od10": 938,
+    "zone_flow_anchors_od10": 1074,
+    "zone_incoming_flows_od10": 99436,
+    "spatial_ref_sys": 8500
   },
   "building_emissions_note": "Zone-purpose capacity allocation; trips_weighted_rules ~2.3M, trips_weighted_dest ~2.4M expanded PM23 trips",
   "zone_table_mode": "unified",
@@ -34,6 +47,6 @@
     "geo_zone_sp23.csv"
   ],
   "dump_file": "data/db/od_dashboard_tables.dump",
-  "created_at": "2026-06-23T22:45:00.000000+00:00",
-  "dump_size_mb_approx": 238.3
+  "created_at": "2026-06-30T20:21:05.989995+00:00",
+  "dump_size_mb_approx": 239.1
 }
