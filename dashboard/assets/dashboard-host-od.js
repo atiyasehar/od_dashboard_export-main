@@ -152,7 +152,7 @@
     var el = document.getElementById('kpi-trips');
     var subEl = document.getElementById('kpi-trips-sub');
 
-    if (labelEl) labelEl.textContent = 'Car trips (expanded)';
+    if (labelEl) labelEl.textContent = 'Car trips';
     if (el) el.textContent = formatTripsNum(expanded);
     if (subEl) {
       subEl.textContent = stats.kpi_scope === 'island_eligible'

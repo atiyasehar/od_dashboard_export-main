@@ -6,6 +6,8 @@ Portable **PM23 survey** dashboard — CMM island-eligible car trips, zone maps,
 
 | Resource | Link |
 |----------|------|
+| **Dashboard user manual** | [`docs/DASHBOARD_USER_MANUAL.md`](docs/DASHBOARD_USER_MANUAL.md) — run and use the web app |
+| **QGIS user manual** | [`docs/QGIS_USER_MANUAL.md`](docs/QGIS_USER_MANUAL.md) — export and open layers in QGIS |
 | **Full guide (HTML, diagrams)** | [`README.html`](README.html) |
 | **GitHub** | [github.com/atiyasehar/od_dashboard_export-main](https://github.com/atiyasehar/od_dashboard_export-main) |
 | **DB dump** | [`data/db/od_dashboard_tables.dump`](data/db/) — if missing, download from [OneDrive](https://liveconcordia-my.sharepoint.com/:u:/g/personal/atiya_atiya_concordia_ca/IQDAgc05pD40SK9YSnDwFZURAcydIl6xbQHGRnafPX5VfIE?e=j6PxkO) (~238 MB; not in git) |
@@ -502,6 +504,49 @@ Online mode is fine for most local development and deployments with normal inter
 
 ---
 
+## QGIS export (one GeoPackage)
+
+Export every map layer the dashboard uses into a **single GeoPackage** for QGIS:
+
+```powershell
+python scripts/export_qgis_layers.py
+```
+
+```bash
+python3 scripts/export_qgis_layers.py
+```
+
+Uses **`deploy.env`** for PostgreSQL (same as the dashboard). Requires **GDAL `ogr2ogr`** (bundled with QGIS; the script auto-detects QGIS on Windows).
+
+**Default:** exports **CMM zones only** (`cmm=1` in `data/popgen_inputs/geo_zone_sp23.csv`). Pass `--all-zones` to include non-CMM polygons.
+
+**Output (default):** `data/export/od_dashboard_layers.gpkg` plus `od_dashboard_layers.json` (layer list and row counts).
+
+| Layer | Contents |
+|-------|----------|
+| `island_boundary` | Montreal island outline |
+| `zones_emissions` | Zone polygons + rules/destination emission metrics |
+| `zone_flow_anchors` | Flow map anchor points |
+| `incoming_flows` | OD flow lines (origin → destination) |
+| `buildings_emissions` | All building footprints + emission attributes (~900k features) |
+| `zone_emissions_categories` | Category chart table (attributes only) |
+
+**Faster export** (skip buildings; zones + flows only):
+
+```bash
+python scripts/export_qgis_layers.py --skip-buildings
+```
+
+**Custom path / QGIS location:**
+
+```bash
+python scripts/export_qgis_layers.py --output /path/to/export.gpkg --ogr2ogr "/path/to/ogr2ogr"
+```
+
+Open in QGIS: **Layer → Add Layer → Add Vector Layer** → select the `.gpkg` file (all layers appear in the browser).
+
+---
+
 ## What is in the bundle
 
 | Path | Purpose |
@@ -603,6 +648,8 @@ Get-NetTCPConnection -LocalPort $env:PORT -State Listen | ForEach-Object {
 - `scripts/start_dashboard.ps1` / `start_dashboard.sh` — load `deploy.env` and run
 - `dashboard/assets/vendor/` — offline Leaflet/Chart.js bundles
 - `data/db/` — dump location
+- `docs/DASHBOARD_USER_MANUAL.md` — end-user guide (start, navigate, troubleshoot)
+- `docs/QGIS_USER_MANUAL.md` — GeoPackage export and QGIS workflow
 - `docs/screenshots/` — README figures
 
 See **`README.html`** for architecture diagrams, UI tour, and API list.

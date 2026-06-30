@@ -28,7 +28,7 @@
   var ready = {};
   var dataReady = {};
   var activePage = 'od-zones';
-  var FRAME_CACHE_BUST = '20260623-zone-labels';
+  var FRAME_CACHE_BUST = '20260629-building-legend-kg';
 
   function parentAttributionParam() {
     try {
@@ -226,7 +226,8 @@
     if (page === activePage) notifyFrameShow(page);
   }
 
-  function onFrameDataReady(page) {
+  function onFrameDataReady(page, detail) {
+    if (detail && detail.shell && !detail.mapReady) return;
     dataReady[page] = true;
   }
 
@@ -269,9 +270,8 @@
       var onMsg = function (e) {
         if (!e.data) return;
         if (e.data.type === 'dash-data-ready' && e.data.page === page) {
-          finish();
-        }
-        if (e.data.type === 'dash-ready' && e.data.page === page) {
+          var d = e.data.detail;
+          if (d && d.shell && !d.mapReady) return;
           finish();
         }
       };
@@ -300,7 +300,7 @@
       new Promise(function (resolve) { window.setTimeout(resolve, 18000); }),
     ]);
     return dismissP
-      .then(function () { return PageLoading.finish(350); })
+      .then(function () { return PageLoading.finish(900); })
       .catch(function (err) {
         console.error('od host loading:', err);
         PageLoading.hideNow();
@@ -337,7 +337,9 @@
     window.addEventListener('message', function (e) {
       if (!e.data || typeof e.data !== 'object') return;
       if (e.data.type === 'dash-ready' && e.data.page) onFrameReady(e.data.page);
-      if (e.data.type === 'dash-data-ready' && e.data.page) onFrameDataReady(e.data.page);
+      if (e.data.type === 'dash-data-ready' && e.data.page) {
+        onFrameDataReady(e.data.page, e.data.detail);
+      }
       if (e.data.type === 'dash-hint' && e.data.page === activePage && e.data.text) {
         setLiveHint(e.data.text, e.data.page);
       }

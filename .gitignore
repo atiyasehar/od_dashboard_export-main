@@ -26,3 +26,7 @@ data/db/*.dump
 # Logs / temp
 *.log
 *.tmp
+
+# QGIS exports (large; regenerate with scripts/export_qgis_layers.py)
+data/export/*.gpkg
+data/export/*.json

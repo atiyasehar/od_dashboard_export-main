@@ -65,6 +65,9 @@ from dashboard_server import (  # noqa: E402
     _zone_label_for,
     _zone_short_name_for,
     _montreal_island_geometry_geojson_for_postgis,
+    _montreal_boundary_geojson_fc,
+    _zones_geom_table,
+    ensure_zones_geom_compat,
     _normalize_building_by,
     _parse_building_grid_cell_deg,
     _request_island_only,
@@ -843,10 +846,15 @@ def api_internal_error(err):
 
 @app.route("/api/montreal_boundary.geojson")
 def api_montreal_boundary():
-    for fname in ("mtl_boundary_file.geojson", "mtl_boundary_file_padded.geojson"):
-        path = _data_dir() / fname
-        if path.is_file():
-            return send_from_directory(_data_dir(), fname, mimetype="application/geo+json")
+    buffer_m = _arg_float("buffer_m", None)
+    conn = get_conn()
+    try:
+        cur = conn.cursor()
+        fc = _montreal_boundary_geojson_fc(cur, buffer_m=buffer_m)
+    finally:
+        conn.close()
+    if fc:
+        return jsonify(fc)
     return jsonify({"type": "FeatureCollection", "features": []})
 
 
@@ -1106,7 +1114,7 @@ def _od10_zone_map_rows(
         params.append(clip_gj)
         island_pred = (
             "\n              AND EXISTS (SELECT 1 FROM island ix WHERE ST_Intersects("
-            "ix.ig, ST_Centroid(ST_MakeValid(ST_Force2D(g.geom::geometry)))))"
+            "ix.ig, ST_MakeValid(ST_Force2D(g.geom::geometry))))"
         )
     pos_lat = zone_point_on_surface_lat_sql("g")
     pos_lon = zone_point_on_surface_lon_sql("g")
@@ -1114,7 +1122,7 @@ def _od10_zone_map_rows(
     if anchor_tab:
         map_lat = f"COALESCE(za.map_lat, {pos_lat})"
         map_lon = f"COALESCE(za.map_lon, {pos_lon})"
-        join_anchor = f"LEFT JOIN {SCHEMA}.{anchor_tab} za ON za.geo_id = z.geo_id::text"
+        join_anchor = f"LEFT JOIN {SCHEMA}.{anchor_tab} za ON za.geo_id = g.geo_id::text"
     else:
         map_lat = pos_lat
         map_lon = pos_lon
@@ -1124,19 +1132,23 @@ def _od10_zone_map_rows(
     extra_cols = ""
     if has_w:
         extra_cols = f"""
-               z.{cols['trips_weighted']}::double precision AS trips_weighted,
-               z.{cols['emissions_g_weighted']}::double precision AS emissions_g_weighted,
-               z.{cols['distance_km']}::double precision AS distance_km,
-               z.{cols['distance_km_weighted']}::double precision AS distance_km_weighted,"""
-    emis_col = f"z.{cols['emissions_g_weighted']}" if use_w else f"z.{cols['emissions_g']}"
+               COALESCE(z.{cols['trips_weighted']}, 0)::double precision AS trips_weighted,
+               COALESCE(z.{cols['emissions_g_weighted']}, 0)::double precision AS emissions_g_weighted,
+               COALESCE(z.{cols['distance_km']}, 0)::double precision AS distance_km,
+               COALESCE(z.{cols['distance_km_weighted']}, 0)::double precision AS distance_km_weighted,"""
+    emis_col_raw = f"z.{cols['emissions_g_weighted']}" if use_w else f"z.{cols['emissions_g']}"
+    emis_col = f"COALESCE({emis_col_raw}, 0)"
+    zgeom = _zones_geom_table(cur)
+    if not zgeom:
+        return {"zones": [], "geojson": None}
     sql = island_cte + f"""
-        SELECT z.geo_id::text AS geo_id,
-               z.{cols['trips']}::double precision AS trips,
-               z.{cols['emissions_g']}::double precision AS emissions_g,{extra_cols}
+        SELECT g.geo_id::text AS geo_id,
+               COALESCE(z.{cols['trips']}, 0)::double precision AS trips,
+               COALESCE(z.{cols['emissions_g']}, 0)::double precision AS emissions_g,{extra_cols}
                {map_lat}::double precision AS lat,
                {map_lon}::double precision AS lon
-        FROM {SCHEMA}.{ztab} z
-        JOIN {SCHEMA}.popgen_zones_geom g ON g.geo_id::text = z.geo_id::text
+        FROM {SCHEMA}.{zgeom} g
+        LEFT JOIN {SCHEMA}.{ztab} z ON z.geo_id::text = g.geo_id::text
         {join_anchor}
         WHERE {emis_col} >= %s"""
     params.append(min_g)
@@ -1636,30 +1648,17 @@ def _zone_building_fabric_features(
     inventory_by_id: dict[str, dict],
     row_limit: int,
 ) -> tuple[list[dict], bool]:
-    """All footprint polygons in a zone; merge emissions only for filtered inventory rows."""
-    cur.execute(
-        f"""
-        SELECT b.id::text,
-               split_part(trim(b.zone_geo_id::text), '.', 1) AS zone_geo_id,
-               {geom_sql} AS geom_json
-        FROM {SCHEMA}.{BUILDINGS_TABLE} AS b
-        WHERE b.geometry IS NOT NULL
-          AND split_part(trim(b.zone_geo_id::text), '.', 1) = %s
-        ORDER BY b.id::text
-        LIMIT %s
-        """,
-        (zone_geo_id, row_limit + 1),
-    )
-    rows = cur.fetchall()
-    truncated = len(rows) > row_limit
-    if truncated:
-        rows = rows[:row_limit]
+    """Footprint polygons in a zone; inventory buildings first, then others up to row_limit."""
+    inv_ids = [str(bid).strip() for bid in inventory_by_id.keys() if bid]
     features: list[dict] = []
-    for r in rows:
+    seen: set[str] = set()
+
+    def _append_row(r: tuple) -> None:
         bid = str(r[0] or "").strip()
         geom_json = r[2]
-        if not bid or not geom_json:
-            continue
+        if not bid or not geom_json or bid in seen:
+            return
+        seen.add(bid)
         inv = inventory_by_id.get(bid)
         props: dict = {
             "building_id": bid,
@@ -1679,6 +1678,78 @@ def _zone_building_fabric_features(
         feat = _geom_json_to_feature(geom_json, props)
         if feat:
             features.append(feat)
+
+    if inv_ids:
+        cur.execute(
+            f"""
+            SELECT b.id::text,
+                   split_part(trim(b.zone_geo_id::text), '.', 1) AS zone_geo_id,
+                   {geom_sql} AS geom_json
+            FROM {SCHEMA}.{BUILDINGS_TABLE} AS b
+            WHERE b.geometry IS NOT NULL
+              AND split_part(trim(b.zone_geo_id::text), '.', 1) = %s
+              AND b.id::text = ANY(%s)
+            ORDER BY b.id::text
+            """,
+            (zone_geo_id, inv_ids),
+        )
+        for r in cur.fetchall():
+            if len(features) >= row_limit:
+                break
+            _append_row(r)
+
+    remaining = row_limit - len(features)
+    if remaining > 0:
+        exclude = list(seen)
+        if exclude:
+            cur.execute(
+                f"""
+                SELECT b.id::text,
+                       split_part(trim(b.zone_geo_id::text), '.', 1) AS zone_geo_id,
+                       {geom_sql} AS geom_json
+                FROM {SCHEMA}.{BUILDINGS_TABLE} AS b
+                WHERE b.geometry IS NOT NULL
+                  AND split_part(trim(b.zone_geo_id::text), '.', 1) = %s
+                  AND NOT (b.id::text = ANY(%s))
+                ORDER BY b.id::text
+                LIMIT %s
+                """,
+                (zone_geo_id, exclude, remaining + 1),
+            )
+        else:
+            cur.execute(
+                f"""
+                SELECT b.id::text,
+                       split_part(trim(b.zone_geo_id::text), '.', 1) AS zone_geo_id,
+                       {geom_sql} AS geom_json
+                FROM {SCHEMA}.{BUILDINGS_TABLE} AS b
+                WHERE b.geometry IS NOT NULL
+                  AND split_part(trim(b.zone_geo_id::text), '.', 1) = %s
+                ORDER BY b.id::text
+                LIMIT %s
+                """,
+                (zone_geo_id, remaining + 1),
+            )
+        extra = cur.fetchall()
+        extra_truncated = len(extra) > remaining
+        if extra_truncated:
+            extra = extra[:remaining]
+        for r in extra:
+            _append_row(r)
+    else:
+        extra_truncated = False
+
+    cur.execute(
+        f"""
+        SELECT COUNT(*)::bigint
+        FROM {SCHEMA}.{BUILDINGS_TABLE} AS b
+        WHERE b.geometry IS NOT NULL
+          AND split_part(trim(b.zone_geo_id::text), '.', 1) = %s
+        """,
+        (zone_geo_id,),
+    )
+    zone_total = int((cur.fetchone() or [0])[0] or 0)
+    truncated = zone_total > row_limit or extra_truncated or len(inv_ids) > row_limit
     return features, truncated
 
 
@@ -2799,6 +2870,19 @@ if __name__ == "__main__":
         db_password=args.db_password,
         db_schema=args.db_schema,
     )
+    try:
+        _zc = get_conn()
+        try:
+            _cur = _zc.cursor()
+            ensure_zones_geom_compat(_cur)
+            _zc.commit()
+            _zt = _zones_geom_table(_cur)
+            if _zt:
+                print(f"  Zone geometry table: {SCHEMA}.{_zt}", flush=True)
+        finally:
+            _zc.close()
+    except Exception as _ze:
+        print(f"  Zone geometry check skipped: {_ze}", flush=True)
     up = DEPLOY["url_prefix"]
     ap = DEPLOY["api_prefix"]
     base = f"http://127.0.0.1:{args.port}{up or ''}"

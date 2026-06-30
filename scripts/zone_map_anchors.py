@@ -11,6 +11,8 @@ from dashboard_server import (
     SCHEMA,
     _column_exists,
     _table_exists,
+    _zones_geom_table,
+    ensure_zones_geom_compat,
 )
 
 # Zones smaller than this are treated like point placeholders (km² on spheroid).
@@ -111,7 +113,7 @@ def create_trip_endpoint_centroids_temp(
     return True
 
 
-def _snap_lat_lon_sql(lat_expr: str, lon_expr: str) -> tuple[str, str]:
+def _snap_lat_lon_sql(lat_expr: str, lon_expr: str, *, geom_table: str) -> tuple[str, str]:
     """Snap (lat, lon) to the nearest real zone polygon when the point is not on land."""
     pt = f"ST_SetSRID(ST_MakePoint(({lon_expr})::double precision, ({lat_expr})::double precision), 4326)"
     poly = f"""
@@ -124,7 +126,7 @@ def _snap_lat_lon_sql(lat_expr: str, lon_expr: str) -> tuple[str, str]:
             WHEN ST_Contains(p.geom, {pt}) THEN ({lat_expr})::double precision
             ELSE ST_Y(ST_ClosestPoint(ST_MakeValid(ST_Force2D(p.geom::geometry)), {pt}))::double precision
          END
-         FROM {SCHEMA}.popgen_zones_geom p
+         FROM {SCHEMA}.{geom_table} p
          WHERE {poly} AND p.geom && ST_Expand({pt}, 0.08)
          ORDER BY p.geom <-> {pt}
          LIMIT 1)
@@ -134,7 +136,7 @@ def _snap_lat_lon_sql(lat_expr: str, lon_expr: str) -> tuple[str, str]:
             WHEN ST_Contains(p.geom, {pt}) THEN ({lon_expr})::double precision
             ELSE ST_X(ST_ClosestPoint(ST_MakeValid(ST_Force2D(p.geom::geometry)), {pt}))::double precision
          END
-         FROM {SCHEMA}.popgen_zones_geom p
+         FROM {SCHEMA}.{geom_table} p
          WHERE {poly} AND p.geom && ST_Expand({pt}, 0.08)
          ORDER BY p.geom <-> {pt}
          LIMIT 1)
@@ -144,7 +146,7 @@ def _snap_lat_lon_sql(lat_expr: str, lon_expr: str) -> tuple[str, str]:
     return snap_lat, snap_lon
 
 
-def _snap_point(cur, lat: float | None, lon: float | None) -> tuple[float | None, float | None]:
+def _snap_point(cur, lat: float | None, lon: float | None, *, geom_table: str) -> tuple[float | None, float | None]:
     """Snap one WGS84 point to the nearest real zone polygon if it is not on land."""
     if lat is None or lon is None:
         return lat, lon
@@ -167,7 +169,7 @@ def _snap_point(cur, lat: float | None, lon: float | None) -> tuple[float | None
               WHEN ST_Contains(p.geom, pt.g) THEN %s::double precision
               ELSE ST_X(ST_ClosestPoint(ST_MakeValid(ST_Force2D(p.geom::geometry)), pt.g))::double precision
             END
-        FROM {SCHEMA}.popgen_zones_geom p
+        FROM {SCHEMA}.{geom_table} p
         CROSS JOIN pt
         WHERE {poly}
           AND p.geom && ST_Expand(pt.g, 0.08)
@@ -189,12 +191,13 @@ def _anchor_from_trip_sql(
     fallback_lon: str,
     *,
     snap: bool,
+    geom_table: str,
 ) -> tuple[str, str]:
     raw_lat = f"COALESCE({trip_lat}, {fallback_lat})"
     raw_lon = f"COALESCE({trip_lon}, {fallback_lon})"
     if not snap:
         return raw_lat, raw_lon
-    return _snap_lat_lon_sql(raw_lat, raw_lon)
+    return _snap_lat_lon_sql(raw_lat, raw_lon, geom_table=geom_table)
 
 
 def create_zone_flow_anchors_temp(cur, *, routes_table: str, has_geom: bool) -> str:
@@ -206,24 +209,32 @@ def create_zone_flow_anchors_temp(cur, *, routes_table: str, has_geom: bool) -> 
     cur.execute(f"DROP TABLE IF EXISTS {table}")
     create_trip_endpoint_centroids_temp(cur, routes_table)
 
+    zgeom = ensure_zones_geom_compat(cur) or _zones_geom_table(cur)
     degen = zone_geom_is_degenerate_sql("g")
     pos_lat = zone_point_on_surface_lat_sql("g")
     pos_lon = zone_point_on_surface_lon_sql("g")
-    orig_lat_raw, orig_lon_raw = _anchor_from_trip_sql("tco.lat", "tco.lon", pos_lat, pos_lon, snap=False)
-    dest_lat_raw, dest_lon_raw = _anchor_from_trip_sql("tcd.lat", "tcd.lon", pos_lat, pos_lon, snap=False)
+    orig_lat_raw, orig_lon_raw = _anchor_from_trip_sql(
+        "tco.lat", "tco.lon", pos_lat, pos_lon, snap=False, geom_table=zgeom or "zones_geom"
+    )
+    dest_lat_raw, dest_lon_raw = _anchor_from_trip_sql(
+        "tcd.lat", "tcd.lon", pos_lat, pos_lon, snap=False, geom_table=zgeom or "zones_geom"
+    )
     map_lat_raw = f"CASE WHEN {degen} THEN COALESCE(tco.lat, tcd.lat, {pos_lat}) ELSE {pos_lat} END"
     map_lon_raw = f"CASE WHEN {degen} THEN COALESCE(tco.lon, tcd.lon, {pos_lon}) ELSE {pos_lon} END"
+    gt = zgeom or "zones_geom"
     orig_lat, orig_lon = _snap_lat_lon_sql(
         f"CASE WHEN {degen} THEN {orig_lat_raw} ELSE {pos_lat} END",
         f"CASE WHEN {degen} THEN {orig_lon_raw} ELSE {pos_lon} END",
+        geom_table=gt,
     )
     dest_lat, dest_lon = _snap_lat_lon_sql(
         f"CASE WHEN {degen} THEN {dest_lat_raw} ELSE {pos_lat} END",
         f"CASE WHEN {degen} THEN {dest_lon_raw} ELSE {pos_lon} END",
+        geom_table=gt,
     )
-    map_lat, map_lon = _snap_lat_lon_sql(map_lat_raw, map_lon_raw)
+    map_lat, map_lon = _snap_lat_lon_sql(map_lat_raw, map_lon_raw, geom_table=gt)
 
-    if has_geom and _table_exists(cur, "popgen_zones_geom"):
+    if has_geom and zgeom:
         cur.execute(
             f"""
             CREATE TEMP TABLE {table} AS
@@ -234,7 +245,7 @@ def create_zone_flow_anchors_temp(cur, *, routes_table: str, has_geom: bool) -> 
                    {dest_lon} AS dest_lon,
                    {map_lat} AS map_lat,
                    {map_lon} AS map_lon
-            FROM {SCHEMA}.popgen_zones_geom g
+            FROM {SCHEMA}.{zgeom} g
             LEFT JOIN tmp_zone_trip_orig_cent tco ON tco.geo_id = g.geo_id::text
             LEFT JOIN tmp_zone_trip_dest_cent tcd ON tcd.geo_id = g.geo_id::text
             """
@@ -269,7 +280,7 @@ def materialize_zone_flow_anchors_table(
     table_name: str = "zone_flow_anchors_od10",
 ) -> None:
     """Persist anchors for fast zone_map / flows reads (built during --flows-only)."""
-    has_geom = _table_exists(cur, "popgen_zones_geom") and _column_exists(cur, "popgen_zones_geom", "geom")
+    has_geom = bool(_zones_geom_table(cur))
     create_zone_flow_anchors_temp(cur, routes_table=routes_table, has_geom=has_geom)
     cur.execute(f"DROP TABLE IF EXISTS {SCHEMA}.{table_name}")
     cur.execute(
@@ -287,15 +298,19 @@ def fetch_zone_flow_anchors(cur, routes_table: str, geo_ids: set[str]) -> dict[s
     ids = sorted({str(g).strip() for g in geo_ids if g is not None and str(g).strip()})
     if not ids:
         return {}
-    has_geom = _table_exists(cur, "popgen_zones_geom") and _column_exists(cur, "popgen_zones_geom", "geom")
-    if not has_geom:
+    zgeom = ensure_zones_geom_compat(cur) or _zones_geom_table(cur)
+    if not zgeom:
         return {}
     create_trip_endpoint_centroids_temp(cur, routes_table, geo_ids=set(ids))
     degen = zone_geom_is_degenerate_sql("g")
     pos_lat = zone_point_on_surface_lat_sql("g")
     pos_lon = zone_point_on_surface_lon_sql("g")
-    orig_lat_raw, orig_lon_raw = _anchor_from_trip_sql("tco.lat", "tco.lon", pos_lat, pos_lon, snap=False)
-    dest_lat_raw, dest_lon_raw = _anchor_from_trip_sql("tcd.lat", "tcd.lon", pos_lat, pos_lon, snap=False)
+    orig_lat_raw, orig_lon_raw = _anchor_from_trip_sql(
+        "tco.lat", "tco.lon", pos_lat, pos_lon, snap=False, geom_table=zgeom
+    )
+    dest_lat_raw, dest_lon_raw = _anchor_from_trip_sql(
+        "tcd.lat", "tcd.lon", pos_lat, pos_lon, snap=False, geom_table=zgeom
+    )
     map_lat_raw = f"CASE WHEN {degen} THEN COALESCE(tco.lat, tcd.lat, {pos_lat}) ELSE {pos_lat} END"
     map_lon_raw = f"CASE WHEN {degen} THEN COALESCE(tco.lon, tcd.lon, {pos_lon}) ELSE {pos_lon} END"
     cur.execute(
@@ -308,7 +323,7 @@ def fetch_zone_flow_anchors(cur, routes_table: str, geo_ids: set[str]) -> dict[s
                CASE WHEN {degen} THEN {dest_lon_raw} ELSE {pos_lon} END AS dest_lon,
                {map_lat_raw} AS map_lat,
                {map_lon_raw} AS map_lon
-        FROM {SCHEMA}.popgen_zones_geom g
+        FROM {SCHEMA}.{zgeom} g
         LEFT JOIN tmp_zone_trip_orig_cent tco ON tco.geo_id = g.geo_id::text
         LEFT JOIN tmp_zone_trip_dest_cent tcd ON tcd.geo_id = g.geo_id::text
         WHERE g.geo_id::text = ANY(%s)
@@ -318,9 +333,9 @@ def fetch_zone_flow_anchors(cur, routes_table: str, geo_ids: set[str]) -> dict[s
     out: dict[str, dict] = {}
     for geo_id, is_degen, ola, olo, dla, dlo, mla, mlo in cur.fetchall():
         if is_degen:
-            ola, olo = _snap_point(cur, ola, olo)
-            dla, dlo = _snap_point(cur, dla, dlo)
-            mla, mlo = _snap_point(cur, mla, mlo)
+            ola, olo = _snap_point(cur, ola, olo, geom_table=zgeom)
+            dla, dlo = _snap_point(cur, dla, dlo, geom_table=zgeom)
+            mla, mlo = _snap_point(cur, mla, mlo, geom_table=zgeom)
         out[str(geo_id)] = {
             "orig_lat": ola,
             "orig_lon": olo,

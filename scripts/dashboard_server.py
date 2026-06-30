@@ -137,27 +137,21 @@ def _zone_code_for(geo_id) -> str | None:
 
 
 def _zone_names_from_db() -> dict[str, str]:
-    """geo_id -> name from popgen_zones_geom.name (when column exists)."""
+    """geo_id -> name from zone geometry table (.name when column exists)."""
     by_geo: dict[str, str] = {}
     try:
         conn = psycopg2.connect(**DB_PARAMS)
         try:
             cur = conn.cursor()
-            cur.execute(
-                """
-                SELECT 1
-                FROM information_schema.columns
-                WHERE table_schema = %s AND table_name = 'popgen_zones_geom' AND column_name = 'name'
-                LIMIT 1
-                """,
-                (SCHEMA,),
-            )
-            if not cur.fetchone():
+            ensure_zones_geom_compat(cur)
+            conn.commit()
+            zt = _zones_geom_table(cur)
+            if not zt or not _column_exists(cur, zt, "name"):
                 return by_geo
             cur.execute(
                 f"""
                 SELECT geo_id::text, name::text
-                FROM {SCHEMA}.popgen_zones_geom
+                FROM {SCHEMA}.{zt}
                 WHERE name IS NOT NULL AND btrim(name::text) <> ''
                 """
             )
@@ -395,6 +389,57 @@ def _montreal_island_geometry_geojson_for_postgis() -> str | None:
             )
         return _ISLAND_FILTER_GEOM_JSON
     _ISLAND_FILTER_GEOM_JSON = ""
+    return None
+
+
+def _montreal_boundary_geojson_fc(cur, *, buffer_m: float | None = None) -> dict | None:
+    """Montreal island outline for map display.
+
+    When ``buffer_m`` > 0, prefer ``mtl_boundary_file_padded.geojson`` or PostGIS outward
+    buffer (~shoreline + margin). SQL island filters still use the tight unpadded outline.
+    """
+    if buffer_m is not None and float(buffer_m) > 0:
+        padded = REPO_DATA_DIR / "mtl_boundary_file_padded.geojson"
+        if padded.is_file():
+            try:
+                return json.loads(padded.read_text(encoding="utf-8"))
+            except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+                pass
+        tight = _montreal_island_geometry_geojson_for_postgis()
+        if tight and cur is not None:
+            try:
+                cur.execute(
+                    """
+                    SELECT ST_AsGeoJSON(
+                        ST_Multi(
+                            ST_Buffer(
+                                ST_MakeValid(
+                                    ST_SetSRID(ST_GeomFromGeoJSON(%s)::geometry, 4326)
+                                )::geography,
+                                %s
+                            )::geometry
+                        )
+                    )::text
+                    """,
+                    (tight, float(buffer_m)),
+                )
+                row = cur.fetchone()
+                if row and row[0]:
+                    geom = json.loads(row[0])
+                    return {
+                        "type": "FeatureCollection",
+                        "features": [{"type": "Feature", "geometry": geom, "properties": {}}],
+                    }
+            except Exception:
+                pass
+    for fname in ("mtl_boundary_file.geojson", "mtl_boundary_file_padded.geojson"):
+        path = REPO_DATA_DIR / fname
+        if not path.is_file():
+            continue
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            continue
     return None
 
 
@@ -640,6 +685,35 @@ def _column_exists(cur, table: str, column: str) -> bool:
     return cur.fetchone() is not None
 
 
+def _zones_geom_table(cur) -> str | None:
+    """Zone polygon table: ``popgen_zones_geom`` (bundle) or legacy ``zones_geom``."""
+    override = os.environ.get("DASHBOARD_ZONES_GEOM_TABLE", "").strip()
+    if override:
+        if _table_exists(cur, override) and _column_exists(cur, override, "geom"):
+            return override
+        return None
+    for name in ("popgen_zones_geom", "zones_geom"):
+        if (
+            _table_exists(cur, name)
+            and _column_exists(cur, name, "geom")
+            and _column_exists(cur, name, "geo_id")
+        ):
+            return name
+    return None
+
+
+def ensure_zones_geom_compat(cur) -> str | None:
+    """Create ``popgen_zones_geom`` view over ``zones_geom`` when only the legacy table exists."""
+    zt = _zones_geom_table(cur)
+    if zt == "zones_geom" and not _table_exists(cur, "popgen_zones_geom"):
+        cur.execute(
+            f"CREATE OR REPLACE VIEW {SCHEMA}.popgen_zones_geom AS "
+            f"SELECT * FROM {SCHEMA}.zones_geom"
+        )
+        return "popgen_zones_geom"
+    return zt
+
+
 def _pick_purpose_enrichment_table(cur, routes_table: str | None) -> str | None:
     """
     Optional popgen.trip_leg_purpose_enrichment[_TAG] joined to trip_routes on the route leg key.
@@ -697,7 +771,8 @@ def _build_zone_map_geojson(
     """
     if not zones_out:
         return None
-    if not _table_exists(cur, "popgen_zones_geom") or not _column_exists(cur, "popgen_zones_geom", "geom"):
+    zt = _zones_geom_table(cur)
+    if not zt:
         return None
     by_id = {str(z["geo_id"]): z for z in zones_out}
     ids = list(by_id.keys())
@@ -726,7 +801,7 @@ def _build_zone_map_geojson(
                            )
                        )
                    )::text AS gj
-            FROM {SCHEMA}.popgen_zones_geom g
+            FROM {SCHEMA}.{zt} g
             CROSS JOIN bnd
             WHERE g.geo_id::text = ANY(%s)
               AND ST_Intersects(ST_MakeValid(ST_Force2D(g.geom::geometry)), bnd.ig)
@@ -747,7 +822,7 @@ def _build_zone_map_geojson(
                            )
                        )
                    )::text AS gj
-            FROM {SCHEMA}.popgen_zones_geom g
+            FROM {SCHEMA}.{zt} g
             WHERE g.geo_id::text = ANY(%s)
             """,
             (ids,),
@@ -802,11 +877,12 @@ def _build_zone_map_geojson(
 
 
 def _build_zones_boundary_geojson(cur, *, island_only: bool) -> tuple[dict | None, int, list | None]:
-    """All zone polygons from popgen_zones_geom for the boundary reference map.
+    """All zone polygons from the zone geometry table for the boundary reference map.
 
     Returns (geojson_fc, zone_count, bounds) where bounds is [[south, west], [north, east]].
     """
-    if not _table_exists(cur, "popgen_zones_geom") or not _column_exists(cur, "popgen_zones_geom", "geom"):
+    zt = _zones_geom_table(cur)
+    if not zt:
         return None, 0, None
     use_centroids = _table_exists(cur, "geo_zone_centroids")
     island_gj = _montreal_island_geometry_geojson_for_postgis() if island_only else None
@@ -846,7 +922,7 @@ def _build_zones_boundary_geojson(cur, *, island_only: bool) -> tuple[dict | Non
                        )
                    )::text AS gj
                    {centroid_cols}
-            FROM {SCHEMA}.popgen_zones_geom g
+            FROM {SCHEMA}.{zt} g
             CROSS JOIN island
             {centroid_join}
             WHERE ST_Intersects(ST_MakeValid(ST_Force2D(g.geom::geometry)), island.ig)
@@ -869,7 +945,7 @@ def _build_zones_boundary_geojson(cur, *, island_only: bool) -> tuple[dict | Non
                        )
                    )::text AS gj
                    {centroid_cols}
-            FROM {SCHEMA}.popgen_zones_geom g
+            FROM {SCHEMA}.{zt} g
             {centroid_join}
             ORDER BY g.geo_id::text
             """
@@ -907,7 +983,10 @@ def _build_zones_boundary_geojson(cur, *, island_only: bool) -> tuple[dict | Non
 
 
 def _extent_bounds_from_geom_table(cur, *, island_only: bool) -> list | None:
-    """[[south, west], [north, east]] from popgen_zones_geom (optionally clipped to island)."""
+    """[[south, west], [north, east]] from zone geometry (optionally clipped to island)."""
+    zt = _zones_geom_table(cur)
+    if not zt:
+        return None
     island_gj = _montreal_island_geometry_geojson_for_postgis() if island_only else None
     try:
         if island_gj:
@@ -921,7 +1000,7 @@ def _extent_bounds_from_geom_table(cur, *, island_only: bool) -> list | None:
                     SELECT ST_Extent(
                         ST_Intersection(ST_MakeValid(ST_Force2D(g.geom::geometry)), island.ig)
                     ) AS e
-                    FROM {SCHEMA}.popgen_zones_geom g
+                    FROM {SCHEMA}.{zt} g
                     CROSS JOIN island
                     WHERE ST_Intersects(ST_MakeValid(ST_Force2D(g.geom::geometry)), island.ig)
                 ) x
@@ -935,7 +1014,7 @@ def _extent_bounds_from_geom_table(cur, *, island_only: bool) -> list | None:
                 SELECT ST_XMin(e), ST_YMin(e), ST_XMax(e), ST_YMax(e)
                 FROM (
                     SELECT ST_Extent(ST_MakeValid(ST_Force2D(geom::geometry))) AS e
-                    FROM {SCHEMA}.popgen_zones_geom
+                    FROM {SCHEMA}.{zt}
                 ) x
                 WHERE e IS NOT NULL
                 """
@@ -1702,10 +1781,21 @@ def api_health():
 
 @app.route("/api/montreal_boundary.geojson")
 def api_montreal_boundary():
-    for fname in ("mtl_boundary_file.geojson", "mtl_boundary_file_padded.geojson"):
-        p = REPO_DATA_DIR / fname
-        if p.is_file():
-            return send_file(p, mimetype="application/geo+json")
+    buffer_m = request.args.get("buffer_m")
+    buf = None
+    if buffer_m is not None and str(buffer_m).strip():
+        try:
+            buf = float(buffer_m)
+        except (TypeError, ValueError):
+            buf = None
+    conn = get_conn()
+    cur = conn.cursor()
+    try:
+        fc = _montreal_boundary_geojson_fc(cur, buffer_m=buf)
+    finally:
+        conn.close()
+    if fc:
+        return jsonify(fc)
     return jsonify({"type": "FeatureCollection", "features": []})
 
 
@@ -2400,7 +2490,7 @@ def api_zone_map():
                         """,
                         _zagg_params + (min_g,),
                     )
-            elif _table_exists(cur, "popgen_zones_geom") and _column_exists(cur, "popgen_zones_geom", "geom"):
+            elif (zgeom := _zones_geom_table(cur)):
                 if max_g is not None and max_g >= min_g:
                     cur.execute(
                         _zagg_cte
@@ -2410,7 +2500,7 @@ def api_zone_map():
                                ST_X(ST_Centroid(g.geom::geometry))::double precision AS lon,
                                z.emissions_g::double precision AS total_emissions_g, {trips_sql}, {dist_z_sql}
                         FROM {SCHEMA}.{zt} z
-                        JOIN {SCHEMA}.popgen_zones_geom g ON g.geo_id::text = z.geo_id::text
+                        JOIN {SCHEMA}.{zgeom} g ON g.geo_id::text = z.geo_id::text
                         WHERE z.emissions_g >= %s AND z.emissions_g <= %s {_zagg_ig}
                         """,
                         _zagg_params + (min_g, max_g),
@@ -2424,7 +2514,7 @@ def api_zone_map():
                                ST_X(ST_Centroid(g.geom::geometry))::double precision AS lon,
                                z.emissions_g::double precision AS total_emissions_g, {trips_sql}, {dist_z_sql}
                         FROM {SCHEMA}.{zt} z
-                        JOIN {SCHEMA}.popgen_zones_geom g ON g.geo_id::text = z.geo_id::text
+                        JOIN {SCHEMA}.{zgeom} g ON g.geo_id::text = z.geo_id::text
                         WHERE z.emissions_g >= %s {_zagg_ig}
                         """,
                         _zagg_params + (min_g,),
@@ -2547,7 +2637,7 @@ def api_zone_map():
                     """,
                     (min_g,),
                 )
-        elif _table_exists(cur, "popgen_zones_geom") and _column_exists(cur, "popgen_zones_geom", "geom"):
+        elif (zgeom := _zones_geom_table(cur)):
             if max_g is not None and max_g >= min_g:
                 cur.execute(
                     f"""
@@ -2556,7 +2646,7 @@ def api_zone_map():
                            ST_X(ST_Centroid(g.geom::geometry))::double precision AS lon,
                            z.emissions_g AS total_emissions_g, z.trips AS trips
                     FROM {SCHEMA}.{table} z
-                    JOIN {SCHEMA}.popgen_zones_geom g ON g.geo_id::text = z.geo_id::text
+                    JOIN {SCHEMA}.{zgeom} g ON g.geo_id::text = z.geo_id::text
                     WHERE z.emissions_g >= %s AND z.emissions_g <= %s
                     """,
                     (min_g, max_g),
@@ -2569,7 +2659,7 @@ def api_zone_map():
                            ST_X(ST_Centroid(g.geom::geometry))::double precision AS lon,
                            z.emissions_g AS total_emissions_g, z.trips AS trips
                     FROM {SCHEMA}.{table} z
-                    JOIN {SCHEMA}.popgen_zones_geom g ON g.geo_id::text = z.geo_id::text
+                    JOIN {SCHEMA}.{zgeom} g ON g.geo_id::text = z.geo_id::text
                     WHERE z.emissions_g >= %s
                     """,
                     (min_g,),
