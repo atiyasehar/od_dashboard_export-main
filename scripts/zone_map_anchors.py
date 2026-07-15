@@ -351,9 +351,15 @@ def patch_flow_payload_anchors(payload: dict, anchors: dict[str, dict]) -> None:
     """Mutate incoming-flow JSON payload in place."""
     dest_id = str(payload.get("dest_geo_id") or "")
     da = anchors.get(dest_id)
-    if da and da.get("dest_lat") is not None and da.get("dest_lon") is not None:
-        payload["dest_lat"] = da["dest_lat"]
-        payload["dest_lon"] = da["dest_lon"]
+    if da:
+        dlat = da.get("map_lat")
+        dlon = da.get("map_lon")
+        if dlat is None or dlon is None:
+            dlat = da.get("dest_lat")
+            dlon = da.get("dest_lon")
+        if dlat is not None and dlon is not None:
+            payload["dest_lat"] = dlat
+            payload["dest_lon"] = dlon
     for flow in payload.get("flows") or []:
         oid = str(flow.get("orig_geo_id") or "")
         oa = anchors.get(oid)

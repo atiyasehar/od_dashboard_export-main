@@ -7,14 +7,15 @@ Portable **PM23 survey** dashboard — CMM island-eligible car trips, zone maps,
 | Resource | Link |
 |----------|------|
 | **Dashboard user manual** | [`docs/DASHBOARD_USER_MANUAL.md`](docs/DASHBOARD_USER_MANUAL.md) — run and use the web app |
-| **QGIS user manual** | [`docs/QGIS_USER_MANUAL.md`](docs/QGIS_USER_MANUAL.md) — export and open layers in QGIS |
+| **API user manual** | [`docs/API_USER_MANUAL.md`](docs/API_USER_MANUAL.md) · [HTML](docs/API_USER_MANUAL.html) — REST endpoints with curl / HTTP client examples |
 | **Full guide (HTML, diagrams)** | [`README.html`](README.html) |
-| **GitHub** | [github.com/atiyasehar/od_dashboard_export-main](https://github.com/atiyasehar/od_dashboard_export-main) |
-| **DB dump** | [`data/db/od_dashboard_tables.dump`](data/db/) — if missing, download from [OneDrive](https://liveconcordia-my.sharepoint.com/:u:/g/personal/atiya_atiya_concordia_ca/IQAJ5sS0VwhdQ5SYtKaw-8g3AS9G0yONvl3tR7gfnXT7eIQ?e=H5WVeD) (~238 MB; not in git) |
+| **DB dump** | [`data/db/od_dashboard_tables.dump`](data/db/) — ~242 MB; not in git (obtain separately and place in `data/db/`) |
 
 Table row counts and bundle metadata: **`manifest.json`**.
 
 **All connection settings** (HTTP port, PostgreSQL host/port/user/password, URL prefixes, offline mode) are configured in **`deploy.env`** — see [Configuration reference](#configuration-reference) and [Offline / air-gapped deployment](#offline--air-gapped-deployment). The README never assumes a specific port on your machine.
+
+**Sharing this folder:** do not send `deploy.env` (it holds your password). Recipients copy `deploy.example.env` → `deploy.env` and set their own values. The dump file is also separate (~242 MB).
 
 ---
 
@@ -57,14 +58,6 @@ Invoke-RestMethod "http://127.0.0.1:$env:PORT/api/health" | Select-Object ok, db
 
 # 7. Open in browser
 Start-Process "http://127.0.0.1:$env:PORT/"
-```
-
-**Alternative restore (unpack script):**
-
-```powershell
-python scripts/bundle_od_dashboard.py unpack --bundle-dir . `
-  --host $env:PGHOST --port $env:PGPORT --user $env:PGUSER `
-  --password $env:PGPASSWORD --dbname $env:PGDATABASE
 ```
 
 **Alternative run (manual):**
@@ -112,14 +105,6 @@ open "http://127.0.0.1:${PORT}/"
 # Linux: xdg-open "http://127.0.0.1:${PORT}/"
 ```
 
-**Alternative restore (unpack script):**
-
-```bash
-python3 scripts/bundle_od_dashboard.py unpack --bundle-dir . \
-  --host "$PGHOST" --port "$PGPORT" --user "$PGUSER" \
-  --password "$PGPASSWORD" --dbname "$PGDATABASE"
-```
-
 **Alternative run (manual):**
 
 ```bash
@@ -156,10 +141,10 @@ Get-NetTCPConnection -LocalPort $env:PORT -State Listen | ForEach-Object {
 ### 2. Get the code and database dump
 
 ```bash
-git clone https://github.com/atiyasehar/od_dashboard_export-main.git
+# Clone or extract this project, then:
 cd od_dashboard_export-main
 mkdir -p data/db
-# Copy od_dashboard_tables.dump into data/db/ (OneDrive link in table above)
+# Copy od_dashboard_tables.dump into data/db/ (provided separately; ~242 MB)
 ```
 
 ### 3. Configure (`deploy.env`) — do this first
@@ -228,14 +213,6 @@ psql -h $env:PGHOST -p $env:PGPORT -U $env:PGUSER -d $env:PGDATABASE `
   -c "CREATE EXTENSION IF NOT EXISTS postgis;"
 ```
 
-**Option C — unpack script** (reads the same flags from `deploy.env` if exported, or pass explicitly):
-
-```powershell
-python scripts/bundle_od_dashboard.py unpack --bundle-dir . `
-  --host $env:PGHOST --port $env:PGPORT --user $env:PGUSER `
-  --password $env:PGPASSWORD --dbname $env:PGDATABASE
-```
-
 PostGIS SQL (pgAdmin or psql):
 
 ```sql
@@ -289,14 +266,6 @@ pg_restore -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE" \
   --no-owner --no-acl --clean --if-exists data/db/od_dashboard_tables.dump
 ```
 
-Or unpack script:
-
-```bash
-python3 scripts/bundle_od_dashboard.py unpack --bundle-dir . \
-  --host "$PGHOST" --port "$PGPORT" --user "$PGUSER" \
-  --password "$PGPASSWORD" --dbname "$PGDATABASE"
-```
-
 If client tools are not on `PATH`, set **`PG_BIN`** in `deploy.env` to your PostgreSQL `bin` directory.
 
 #### 6. Run
@@ -345,7 +314,14 @@ Verify tables (in `psql`, using your connection variables):
 SELECT table_name FROM information_schema.tables
 WHERE table_schema = 'public'
   AND table_name IN (
-    'zone_emissions_od10', 'building_emissions_od10', 'buildings_footprint', 'popgen_zones_geom'
+    'zones_geom',
+    'zone_emissions_od10',
+    'zone_emissions_categories_od10',
+    'zone_incoming_flows_od10',
+    'zone_flow_anchors_od10',
+    'building_emissions_od10',
+    'buildings_footprint',
+    'trips_route_emissions'
   )
 ORDER BY table_name;
 ```
@@ -504,49 +480,6 @@ Online mode is fine for most local development and deployments with normal inter
 
 ---
 
-## QGIS export (one GeoPackage)
-
-Export every map layer the dashboard uses into a **single GeoPackage** for QGIS:
-
-```powershell
-python scripts/export_qgis_layers.py
-```
-
-```bash
-python3 scripts/export_qgis_layers.py
-```
-
-Uses **`deploy.env`** for PostgreSQL (same as the dashboard). Requires **GDAL `ogr2ogr`** (bundled with QGIS; the script auto-detects QGIS on Windows).
-
-**Default:** exports **CMM zones only** (`cmm=1` in `data/popgen_inputs/geo_zone_sp23.csv`). Pass `--all-zones` to include non-CMM polygons.
-
-**Output (default):** `data/export/od_dashboard_layers.gpkg` plus `od_dashboard_layers.json` (layer list and row counts).
-
-| Layer | Contents |
-|-------|----------|
-| `island_boundary` | Montreal island outline |
-| `zones_emissions` | Zone polygons + rules/destination emission metrics |
-| `zone_flow_anchors` | Flow map anchor points |
-| `incoming_flows` | OD flow lines (origin → destination) |
-| `buildings_emissions` | All building footprints + emission attributes (~900k features) |
-| `zone_emissions_categories` | Category chart table (attributes only) |
-
-**Faster export** (skip buildings; zones + flows only):
-
-```bash
-python scripts/export_qgis_layers.py --skip-buildings
-```
-
-**Custom path / QGIS location:**
-
-```bash
-python scripts/export_qgis_layers.py --output /path/to/export.gpkg --ogr2ogr "/path/to/ogr2ogr"
-```
-
-Open in QGIS: **Layer → Add Layer → Add Vector Layer** → select the `.gpkg` file (all layers appear in the browser).
-
----
-
 ## What is in the bundle
 
 | Path | Purpose |
@@ -554,9 +487,13 @@ Open in QGIS: **Layer → Add Layer → Add Vector Layer** → select the `.gpkg
 | `dashboard/` | HTML / JS / CSS (zone maps, buildings, flows) |
 | `dashboard/assets/vendor/` | Bundled Leaflet, Chart.js, icons (for offline mode) |
 | `scripts/run_dashboard.py` | Flask API server (**use this to run**) |
+| `scripts/start_dashboard.ps1` / `start_dashboard.sh` | Load `deploy.env` and start the server |
+| `scripts/dashboard_server.py` | Shared API helpers used by `run_dashboard.py` |
+| `scripts/zone_map_anchors.py` | Zone map / flow anchor helpers |
+| `scripts/meeting_emissions_attribution.py` | Attribution SQL helpers |
+| `scripts/od_table_names.py` / `popgen_constants.py` | Table names and shared constants |
 | `data/db/od_dashboard_tables.dump` | PostgreSQL dump (you provide if not in repo) |
 | `data/mtl_boundary_file.geojson` | Island outline for maps (optional but bundled) |
-| `data/popgen_inputs/*.csv` | Zone label fallbacks (optional) |
 | `deploy.example.env` | Configuration template → copy to `deploy.env` |
 | `manifest.json` | Dump metadata and row counts |
 
@@ -585,7 +522,7 @@ Load **`deploy.env`**, then dump (table list matches `manifest.json`):
 set -a && source <(grep -v '^#' deploy.env | grep -v '^[[:space:]]*$' | sed 's/^/export /') && set +a
 pg_dump -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE" -Fc --no-owner --no-acl \
   -f data/db/od_dashboard_tables.dump -n "$PGSCHEMA" \
-  -t "$PGSCHEMA.popgen_zones_geom" -t "$PGSCHEMA.zone_emissions_od10" \
+  -t "$PGSCHEMA.zones_geom" -t "$PGSCHEMA.zone_emissions_od10" \
   -t "$PGSCHEMA.zone_incoming_flows_od10" -t "$PGSCHEMA.zone_flow_anchors_od10" \
   -t "$PGSCHEMA.zone_emissions_categories_od10" -t "$PGSCHEMA.building_emissions_od10" \
   -t "$PGSCHEMA.buildings_footprint" -t "$PGSCHEMA.trips_route_emissions"
@@ -596,7 +533,7 @@ pg_dump -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE" -Fc --no-owner -
 ```powershell
 pg_dump -h $env:PGHOST -p $env:PGPORT -U $env:PGUSER -d $env:PGDATABASE -Fc --no-owner --no-acl `
   -f data/db/od_dashboard_tables.dump -n $env:PGSCHEMA `
-  -t "$($env:PGSCHEMA).popgen_zones_geom" -t "$($env:PGSCHEMA).zone_emissions_od10" `
+  -t "$($env:PGSCHEMA).zones_geom" -t "$($env:PGSCHEMA).zone_emissions_od10" `
   -t "$($env:PGSCHEMA).zone_incoming_flows_od10" -t "$($env:PGSCHEMA).zone_flow_anchors_od10" `
   -t "$($env:PGSCHEMA).zone_emissions_categories_od10" -t "$($env:PGSCHEMA).building_emissions_od10" `
   -t "$($env:PGSCHEMA).buildings_footprint" -t "$($env:PGSCHEMA).trips_route_emissions"
@@ -646,10 +583,10 @@ Get-NetTCPConnection -LocalPort $env:PORT -State Listen | ForEach-Object {
 - `dashboard/` — SPA + map views
 - `scripts/run_dashboard.py` — API server
 - `scripts/start_dashboard.ps1` / `start_dashboard.sh` — load `deploy.env` and run
+- `scripts/dashboard_server.py`, `zone_map_anchors.py`, `meeting_emissions_attribution.py`, `od_table_names.py`, `popgen_constants.py` — runtime support modules
 - `dashboard/assets/vendor/` — offline Leaflet/Chart.js bundles
 - `data/db/` — dump location
 - `docs/DASHBOARD_USER_MANUAL.md` — end-user guide (start, navigate, troubleshoot)
-- `docs/QGIS_USER_MANUAL.md` — GeoPackage export and QGIS workflow
-- `docs/screenshots/` — README figures
+- `docs/API_USER_MANUAL.md` / [`docs/API_USER_MANUAL.html`](docs/API_USER_MANUAL.html) — REST API reference with parameter examples (curl, Postman, Swagger, etc.)
 
 See **`README.html`** for architecture diagrams, UI tour, and API list.

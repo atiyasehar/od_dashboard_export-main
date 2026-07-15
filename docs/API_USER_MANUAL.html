@@ -1,0 +1,562 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>OD Dashboard — API User Manual</title>
+  <style>
+    :root {
+      --bg: #0c1119;
+      --surface: #121a26;
+      --surface2: #0a1018;
+      --border: rgba(94, 129, 172, 0.28);
+      --text: #e8eef7;
+      --muted: #8b9cb8;
+      --accent: #5eead4;
+      --accent2: #38bdf8;
+      --warn: #fbbf24;
+      --ok: #4ade80;
+      --err: #fb7185;
+    }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      font-family: "Segoe UI", system-ui, sans-serif;
+      background: radial-gradient(1000px 600px at 0% -10%, rgba(56, 189, 248, 0.08), transparent),
+        radial-gradient(800px 500px at 100% 0%, rgba(94, 234, 212, 0.05), transparent), var(--bg);
+      color: var(--text);
+      line-height: 1.6;
+      padding: 0 1.25rem 4rem;
+    }
+    .hero { max-width: 960px; margin: 0 auto; padding: 2.5rem 0 1.5rem; }
+    .wrap { max-width: 960px; margin: 0 auto; }
+    h1 {
+      font-size: clamp(1.6rem, 4vw, 2.1rem);
+      margin: 0 0 0.4rem;
+      background: linear-gradient(135deg, var(--text), var(--accent));
+      -webkit-background-clip: text;
+      background-clip: text;
+      color: transparent;
+    }
+    .sub { color: var(--muted); margin: 0 0 1.5rem; font-size: 1.02rem; }
+    nav.toc {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 1rem 1.25rem;
+      margin: 1.5rem 0 2rem;
+    }
+    nav.toc strong { color: var(--text); display: block; margin-bottom: 0.5rem; }
+    nav.toc ol { margin: 0; padding-left: 1.2rem; columns: 2; column-gap: 2rem; }
+    nav.toc a { color: var(--accent); text-decoration: none; font-size: 0.92rem; }
+    nav.toc a:hover { text-decoration: underline; }
+    h2 {
+      font-size: 1.25rem;
+      margin: 2.5rem 0 1rem;
+      color: var(--accent);
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 0.4rem;
+      scroll-margin-top: 1rem;
+    }
+    h3 {
+      font-size: 1rem;
+      margin: 1.75rem 0 0.5rem;
+      color: var(--text);
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 0.5rem;
+    }
+    h4 { font-size: 0.9rem; margin: 1rem 0 0.4rem; color: var(--muted); }
+    p, li { color: var(--muted); }
+    strong { color: var(--text); }
+    a { color: var(--accent); }
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 1rem 1.2rem;
+      margin: 1rem 0;
+    }
+    .endpoint {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 1rem 1.2rem 1.1rem;
+      margin: 1.25rem 0;
+    }
+    .method {
+      display: inline-block;
+      font-size: 0.68rem;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      padding: 0.2em 0.55em;
+      border-radius: 5px;
+      background: rgba(74, 222, 128, 0.15);
+      color: var(--ok);
+      border: 1px solid rgba(74, 222, 128, 0.35);
+    }
+    .path {
+      font-family: Consolas, "Cascadia Mono", monospace;
+      font-size: 0.88rem;
+      color: var(--accent2);
+      word-break: break-all;
+    }
+    .purpose { margin: 0.5rem 0 0.75rem; font-size: 0.92rem; }
+    ul { padding-left: 1.25rem; }
+    li { margin: 0.35rem 0; }
+    code {
+      font-family: Consolas, "Cascadia Mono", monospace;
+      font-size: 0.86em;
+      background: rgba(0, 0, 0, 0.4);
+      padding: 0.1em 0.4em;
+      border-radius: 5px;
+      color: #c7d6ee;
+    }
+    pre {
+      background: #070a0f;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 0.85rem 1rem;
+      overflow-x: auto;
+      font-size: 0.78rem;
+      line-height: 1.5;
+      margin: 0.6rem 0;
+    }
+    pre code { background: none; padding: 0; color: #d8e6ff; }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.84rem;
+      margin: 0.65rem 0;
+    }
+    th, td {
+      text-align: left;
+      padding: 0.45rem 0.6rem;
+      border-bottom: 1px solid var(--border);
+      vertical-align: top;
+    }
+    th { color: var(--text); background: rgba(0,0,0,0.2); }
+    td { color: var(--muted); }
+    .example-label {
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--accent);
+      margin: 0.85rem 0 0.25rem;
+      font-weight: 600;
+    }
+    .resp { font-size: 0.86rem; margin-top: 0.5rem; }
+    .footer {
+      margin-top: 3rem;
+      padding-top: 1.5rem;
+      border-top: 1px solid var(--border);
+      font-size: 0.85rem;
+      color: var(--muted);
+    }
+    @media (max-width: 640px) {
+      nav.toc ol { columns: 1; }
+    }
+  </style>
+</head>
+<body>
+  <div class="hero">
+    <h1>OD Dashboard — API User Manual</h1>
+    <p class="sub">
+      Read-only JSON REST endpoints for the PopGen OD dashboard server
+      (<code>scripts/run_dashboard.py</code>). Map endpoints may include zone or building shapes as JSON.
+      Test with <strong>curl</strong>, <strong>Insomnia</strong>, <strong>Postman</strong>, <strong>Swagger UI</strong>, or any HTTP client.<br>
+      Markdown version: <a href="API_USER_MANUAL.md">API_USER_MANUAL.md</a> ·
+      Dashboard guide: <a href="DASHBOARD_USER_MANUAL.md">DASHBOARD_USER_MANUAL.md</a>
+    </p>
+  </div>
+
+  <div class="wrap">
+    <nav class="toc">
+      <strong>Contents</strong>
+      <ol>
+        <li><a href="#before">Before you call any API</a></li>
+        <li><a href="#health">Health &amp; reference</a></li>
+        <li><a href="#zones">Zone maps &amp; boundaries</a></li>
+        <li><a href="#zone-sidebar">Zone sidebar</a></li>
+        <li><a href="#flows">Incoming flows</a></li>
+        <li><a href="#buildings">Buildings</a></li>
+        <li><a href="#order">Suggested test order</a></li>
+        <li><a href="#troubleshoot">Troubleshooting</a></li>
+        <li><a href="#quickref">Quick reference</a></li>
+      </ol>
+    </nav>
+
+    <h2 id="before">1. Before you call any API</h2>
+
+    <h3>Start the server</h3>
+    <pre><code>.\scripts\start_dashboard.ps1</code></pre>
+    <p>Leave the terminal open. The server reads PostgreSQL settings from <code>deploy.env</code>.</p>
+
+    <h3>Base URL</h3>
+    <p>Set one variable in your HTTP client:</p>
+    <table>
+      <thead><tr><th>Variable</th><th>Example value</th><th>Purpose</th></tr></thead>
+      <tbody>
+        <tr><td><code>base_url</code></td><td><code>http://127.0.0.1:5051</code></td><td>Server root — use your <code>deploy.env</code> host/port (default port <strong>5051</strong>)</td></tr>
+      </tbody>
+    </table>
+
+    <h4>Insomnia</h4>
+    <ol>
+      <li>Press <strong>Ctrl+E</strong> → <strong>Manage Environments</strong>.</li>
+      <li>Select <strong>Base Environment</strong>.</li>
+      <li>Turn <strong>Table View</strong> on. Add <strong>one</strong> row only:</li>
+    </ol>
+    <table>
+      <thead><tr><th>Name</th><th>Type</th><th>Value</th></tr></thead>
+      <tbody>
+        <tr><td><code>base_url</code></td><td><strong>Text</strong></td><td><code>http://127.0.0.1:5051</code></td></tr>
+      </tbody>
+    </table>
+    <ul>
+      <li>Type the URL <strong>without</strong> quote characters.</li>
+      <li>Do <strong>not</strong> add a second row with Type <strong>JSON</strong> — that breaks variable resolution.</li>
+      <li>Close the dialog. Select <strong>Base Environment</strong> in the top-right dropdown.</li>
+      <li>Request URL: <code>{{ base_url }}/api/health</code></li>
+    </ul>
+    <p>URL preview should show <code>http://127.0.0.1:5051/api/health</code>.</p>
+
+    <h4>Postman, Bruno, and other clients</h4>
+    <pre><code>{
+  "base_url": "http://127.0.0.1:5051"
+}</code></pre>
+    <p>Use <code>{{ base_url }}/api/...</code> in every request below.</p>
+
+    <h4>curl / PowerShell</h4>
+    <p>Paste the full URL (e.g. <code>http://127.0.0.1:5051/api/health</code>) or set a shell variable.</p>
+    <p>Add <strong>zone</strong> and <strong>building</strong> IDs as <strong>query parameters</strong> per request — not in the environment.</p>
+
+    <h3>Conventions</h3>
+    <table>
+      <thead><tr><th>Topic</th><th>Detail</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Methods</strong></td><td>All documented endpoints are <code>GET</code>.</td></tr>
+        <tr><td><strong>Auth</strong></td><td>None (local read-only API).</td></tr>
+        <tr><td><strong>Content-Type</strong></td><td><code>application/json</code></td></tr>
+        <tr><td><strong>Errors</strong></td><td><code>400</code> missing param; <code>404</code> not found; <code>503</code> table missing.</td></tr>
+        <tr><td><strong>CMM zones</strong></td><td><code>cmm=1</code> only (936 zones). Full mesh: <code>zones_boundary?island_only=0</code>.</td></tr>
+      </tbody>
+    </table>
+
+    <h3>Shared query parameters</h3>
+    <table>
+      <thead><tr><th>Parameter</th><th>Values</th><th>Default</th><th>Used on</th></tr></thead>
+      <tbody>
+        <tr><td><code>zone_by</code></td><td><code>rules</code>, <code>dest</code> only</td><td><code>rules</code></td><td>Zone map, flows, zone sidebar</td></tr>
+        <tr><td><code>island_only</code></td><td><code>1</code>/<code>0</code></td><td><code>1</code></td><td><code>zone_map</code>, <code>zones_boundary</code>, <code>building_map</code></td></tr>
+        <tr><td><code>include_geojson</code></td><td><code>1</code>/<code>0</code></td><td><code>1</code></td><td><code>zone_map</code>, <code>zone_maps</code></td></tr>
+        <tr><td><code>min_kg</code></td><td>number ≥ 0</td><td><code>0</code></td><td><code>zone_map</code>, <code>building_map</code></td></tr>
+        <tr><td><code>max_kg</code></td><td>number</td><td>—</td><td><code>zone_map</code>, <code>building_map</code></td></tr>
+        <tr><td><code>building_by</code></td><td><code>rules</code>, <code>dest</code> only</td><td><code>rules</code></td><td><code>building_map</code>, <code>building_detail</code>, <code>building_emission_scale</code></td></tr>
+        <tr><td><code>limit</code></td><td>int or <code>all</code></td><td>varies</td><td>Flows, building map, building outlines</td></tr>
+      </tbody>
+    </table>
+
+    <h3><code>zone_by</code> and <code>building_by</code> — spell <code>rules</code> or <code>dest</code></h3>
+    <div class="card">
+      <p>Pass the value <strong>exactly</strong> in query parameters — lowercase, no spaces:</p>
+      <table>
+        <thead><tr><th>API value (URL)</th><th>Dashboard button</th><th>Meaning</th></tr></thead>
+        <tbody>
+          <tr><td><code>rules</code></td><td>Rules-based</td><td>Routing / meeting rules (default if omitted).</td></tr>
+          <tr><td><code>dest</code></td><td>Destination zone</td><td>Counts rolled up to trip destination.</td></tr>
+        </tbody>
+      </table>
+      <p><strong>Wrong:</strong> <code>Rules-based</code>, <code>destination</code>, <code>Destination zone</code> — use only <code>rules</code> or <code>dest</code>.</p>
+      <pre><code>?zone_by=rules
+?zone_by=dest
+?building_by=rules
+?building_by=dest</code></pre>
+    </div>
+
+    <h2 id="health">2. Health &amp; reference</h2>
+
+    <div class="endpoint" id="api-health">
+      <h3><span class="method">GET</span> <span class="path">/api/health</span></h3>
+      <p class="purpose"><strong>Purpose:</strong> Verify server and database. Returns deploy config and zone-label diagnostics.</p>
+      <p><strong>Parameters:</strong> none</p>
+      <div class="example-label">Example 1 — smoke test</div>
+      <pre><code>GET {{ base_url }}/api/health</code></pre>
+      <pre><code>Invoke-RestMethod "{{ base_url }}/api/health"</code></pre>
+      <div class="example-label">Example 2 — check zone labels loaded</div>
+      <p>Same URL; inspect <code>zone_labels.sample_label_562</code> and <code>zone_labels.zone_codes_loaded</code> in the JSON body.</p>
+      <p class="resp"><strong>Response:</strong> <code>"ok": true</code>, <code>"dbname": "od_dashboard"</code>, <code>deploy.api_base</code>, <code>zone_labels</code>.</p>
+    </div>
+
+    <div class="endpoint" id="api-boundary">
+      <h3><span class="method">GET</span> <span class="path">/api/montreal_boundary.geojson</span></h3>
+      <p class="purpose"><strong>Purpose:</strong> Montreal island outline (border used to clip or frame the map).</p>
+      <table>
+        <thead><tr><th>Parameter</th><th>Type</th><th>Default</th><th>Description</th></tr></thead>
+        <tbody>
+          <tr><td><code>buffer_m</code></td><td>float</td><td>—</td><td>Optional outward buffer (metres)</td></tr>
+        </tbody>
+      </table>
+      <div class="example-label">Example 1 — island outline</div>
+      <pre><code>GET {{ base_url }}/api/montreal_boundary.geojson</code></pre>
+      <div class="example-label">Example 2 — buffered outline</div>
+      <pre><code>GET {{ base_url }}/api/montreal_boundary.geojson?buffer_m=500</code></pre>
+      <table>
+        <thead><tr><th>Query parameter</th><th>value</th></tr></thead>
+        <tbody><tr><td><code>buffer_m</code></td><td><code>500</code></td></tr></tbody>
+      </table>
+    </div>
+
+    <div class="endpoint" id="api-zone-codes">
+      <h3><span class="method">GET</span> <span class="path">/api/od/zone_codes</span></h3>
+      <p class="purpose"><strong>Purpose:</strong> <code>geo_id</code> → zone code and name lookup tables.</p>
+      <div class="example-label">Example 1</div>
+      <pre><code>GET {{ base_url }}/api/od/zone_codes</code></pre>
+      <div class="example-label">Example 2 — with environment</div>
+      <pre><code>GET {{ base_url }}/api/od/zone_codes</code></pre>
+      <p class="resp"><strong>Response:</strong> <code>zone_codes</code>, <code>zone_names</code> objects keyed by <code>geo_id</code>.</p>
+    </div>
+
+    <h2 id="zones">3. Zone maps &amp; boundaries</h2>
+
+    <div class="endpoint" id="api-zones-boundary">
+      <h3><span class="method">GET</span> <span class="path">/api/od/zones_boundary</span></h3>
+      <p class="purpose"><strong>Purpose:</strong> Zone polygon outlines. CMM mesh when <code>island_only=0</code>.</p>
+      <table>
+        <thead><tr><th>Parameter</th><th>Type</th><th>Default</th><th>Description</th></tr></thead>
+        <tbody>
+          <tr><td><code>island_only</code></td><td><code>0</code>/<code>1</code></td><td><code>0</code></td><td><code>0</code> = full CMM mesh; <code>1</code> = island clip</td></tr>
+        </tbody>
+      </table>
+      <div class="example-label">Example 1 — full CMM mesh</div>
+      <pre><code>GET {{ base_url }}/api/od/zones_boundary?island_only=0</code></pre>
+      <div class="example-label">Example 2 — island-only</div>
+      <pre><code>GET {{ base_url }}/api/od/zones_boundary?island_only=1</code></pre>
+      <p class="resp"><strong>Response:</strong> <code>geojson</code>, <code>zone_count</code> (936), <code>bounds</code>, <code>island_only</code>.</p>
+    </div>
+
+    <div class="endpoint" id="api-zone-map">
+      <h3><span class="method">GET</span> <span class="path">/api/od/zone_map</span></h3>
+      <p class="purpose"><strong>Purpose:</strong> Zone map data — per-zone trips, emissions, and distance (colors on the map); optional zone polygon shapes.</p>
+      <table>
+        <thead><tr><th>Parameter</th><th>Type</th><th>Default</th><th>Description</th></tr></thead>
+        <tbody>
+          <tr><td><code>zone_by</code></td><td><code>rules</code> | <code>dest</code></td><td><code>rules</code></td><td>Rules-based or Destination zone</td></tr>
+          <tr><td><code>include_geojson</code></td><td><code>0</code>|<code>1</code></td><td><code>1</code></td><td>Include zone polygon shapes</td></tr>
+          <tr><td><code>island_only</code></td><td><code>0</code>|<code>1</code></td><td><code>1</code></td><td>Island clip</td></tr>
+          <tr><td><code>min_kg</code></td><td>float</td><td><code>0</code></td><td>Emissions floor (kg CO₂e)</td></tr>
+          <tr><td><code>max_kg</code></td><td>float</td><td>—</td><td>Emissions ceiling (kg)</td></tr>
+          <tr><td><code>with_building_scale</code></td><td><code>0</code>|<code>1</code></td><td><code>0</code></td><td>Add legend scale</td></tr>
+        </tbody>
+      </table>
+      <div class="example-label">Example 1 — <code>zone_by=dest</code> (no shapes)</div>
+      <pre><code>GET {{ base_url }}/api/od/zone_map?zone_by=dest&amp;island_only=1&amp;include_geojson=0&amp;min_kg=0</code></pre>
+      <table>
+        <thead><tr><th>Param</th><th>value</th></tr></thead>
+        <tbody>
+          <tr><td><code>zone_by</code></td><td><code>dest</code></td></tr>
+          <tr><td><code>island_only</code></td><td><code>1</code></td></tr>
+          <tr><td><code>include_geojson</code></td><td><code>0</code></td></tr>
+          <tr><td><code>min_kg</code></td><td><code>0</code></td></tr>
+        </tbody>
+      </table>
+      <div class="example-label">Example 2 — <code>zone_by=rules</code> with shapes</div>
+      <pre><code>GET {{ base_url }}/api/od/zone_map?zone_by=rules&amp;island_only=1&amp;include_geojson=1&amp;min_kg=0&amp;with_building_scale=1</code></pre>
+    </div>
+
+    <div class="endpoint" id="api-zone-maps">
+      <h3><span class="method">GET</span> <span class="path">/api/od/zone_maps</span></h3>
+      <p class="purpose"><strong>Purpose:</strong> Both rules-based and destination zone maps in one response.</p>
+      <div class="example-label">Example 1 — no geometry (fast)</div>
+      <pre><code>GET {{ base_url }}/api/od/zone_maps?include_geojson=0&amp;island_only=1</code></pre>
+      <div class="example-label">Example 2 — with polygons</div>
+      <pre><code>GET {{ base_url }}/api/od/zone_maps?include_geojson=1&amp;island_only=1&amp;min_kg=0</code></pre>
+      <p class="resp"><strong>Response:</strong> <code>dest</code> and <code>rules</code> — each has zone numbers and optional shapes.</p>
+    </div>
+
+    <div class="endpoint" id="api-flows-zones">
+      <h3><span class="method">GET</span> <span class="path">/api/od/flows_zones</span></h3>
+      <p class="purpose"><strong>Purpose:</strong> Zone metrics for flows map — never returns polygons.</p>
+      <div class="example-label">Example 1 — <code>zone_by=dest</code></div>
+      <pre><code>GET {{ base_url }}/api/od/flows_zones?zone_by=dest</code></pre>
+      <div class="example-label">Example 2 — <code>zone_by=rules</code></div>
+      <pre><code>GET {{ base_url }}/api/od/flows_zones?zone_by=rules</code></pre>
+    </div>
+
+    <h2 id="zone-sidebar">4. Zone sidebar (KPIs / charts)</h2>
+
+    <div class="endpoint" id="api-zone-sidebar">
+      <h3><span class="method">GET</span> <span class="path">/api/od/zone_sidebar</span></h3>
+      <p class="purpose"><strong>Purpose:</strong> KPIs and travel-reason breakdown for one selected zone (sidebar on zone click).</p>
+      <table>
+        <thead><tr><th>Parameter</th><th>Type</th><th>Required</th><th>Description</th></tr></thead>
+        <tbody>
+          <tr><td><code>geo_id</code></td><td>string</td><td><strong>yes</strong></td><td>Zone ID (e.g. <code>562</code>)</td></tr>
+          <tr><td><code>zone_by</code></td><td><code>rules</code> | <code>dest</code></td><td>no</td><td>Rules-based or Destination zone (default <code>rules</code>)</td></tr>
+          <tr><td><code>dest_geo_id</code></td><td>string</td><td>no</td><td>Alternative name for <code>geo_id</code></td></tr>
+        </tbody>
+      </table>
+      <div class="example-label">Example 1 — <code>zone_by=rules</code></div>
+      <pre><code>GET {{ base_url }}/api/od/zone_sidebar?geo_id=562&amp;zone_by=rules</code></pre>
+      <div class="example-label">Example 2 — <code>zone_by=dest</code></div>
+      <pre><code>GET {{ base_url }}/api/od/zone_sidebar?geo_id=562&amp;zone_by=dest</code></pre>
+      <p class="resp"><strong>Error 400:</strong> <code>{"error": "geo_id is required"}</code> if missing.</p>
+    </div>
+
+    <h2 id="flows">5. Incoming flows</h2>
+
+    <div class="endpoint" id="api-incoming-flow">
+      <h3><span class="method">GET</span> <span class="path">/api/od/zone_incoming_flow</span></h3>
+      <p class="purpose"><strong>Purpose:</strong> Top incoming origins for one destination zone + intra-zone summary.</p>
+      <table>
+        <thead><tr><th>Parameter</th><th>Type</th><th>Required</th><th>Default</th><th>Description</th></tr></thead>
+        <tbody>
+          <tr><td><code>dest_geo_id</code></td><td>string</td><td><strong>yes</strong></td><td>—</td><td>Destination zone</td></tr>
+          <tr><td><code>zone_by</code></td><td><code>rules</code> | <code>dest</code></td><td>no</td><td><code>rules</code></td><td>Rules-based or Destination zone</td></tr>
+          <tr><td><code>limit</code></td><td>int or <code>all</code></td><td>no</td><td><code>10</code></td><td>Max origin zones</td></tr>
+        </tbody>
+      </table>
+      <div class="example-label">Example 1 — top 10 (default)</div>
+      <pre><code>GET {{ base_url }}/api/od/zone_incoming_flow?dest_geo_id=562</code></pre>
+      <div class="example-label">Example 2 — <code>zone_by=dest</code>, top 25</div>
+      <pre><code>GET {{ base_url }}/api/od/zone_incoming_flow?dest_geo_id=562&amp;zone_by=dest&amp;limit=25</code></pre>
+      <p class="resp"><strong>Response:</strong> <code>flows[]</code>, <code>dest_zone_trips</code>, <code>intra_zone</code>, <code>dest_lat</code>, <code>dest_lon</code>.</p>
+    </div>
+
+    <div class="endpoint" id="api-incoming-flows-all">
+      <h3><span class="method">GET</span> <span class="path">/api/od/zone_incoming_flows_all</span></h3>
+      <p class="purpose"><strong>Purpose:</strong> Bulk prefetch — top flows for every destination (heavy).</p>
+      <div class="example-label">Example 1 — top 5 per zone (testing)</div>
+      <pre><code>GET {{ base_url }}/api/od/zone_incoming_flows_all?zone_by=dest&amp;limit=5</code></pre>
+      <div class="example-label">Example 2 — <code>zone_by=rules</code>, all origins</div>
+      <pre><code>GET {{ base_url }}/api/od/zone_incoming_flows_all?zone_by=rules</code></pre>
+      <p class="resp"><strong>Response:</strong> <code>zones</code> object keyed by <code>dest_geo_id</code>.</p>
+    </div>
+
+    <h2 id="buildings">6. Buildings</h2>
+    <p>Building endpoints use <code>building_by</code> — spell <code>rules</code> or <code>dest</code> exactly (see above).</p>
+
+    <div class="endpoint" id="api-building-scale">
+      <h3><span class="method">GET</span> <span class="path">/api/od/building_emission_scale</span></h3>
+      <p class="purpose"><strong>Purpose:</strong> Min/max building emissions (g) for map legend.</p>
+      <table>
+        <thead><tr><th>Parameter</th><th>Type</th><th>Default</th><th>Description</th></tr></thead>
+        <tbody>
+          <tr><td><code>building_by</code></td><td><code>rules</code> | <code>dest</code></td><td><code>rules</code></td><td>Rules-based or Destination zone</td></tr>
+        </tbody>
+      </table>
+      <div class="example-label">Example 1 — <code>building_by=rules</code></div>
+      <pre><code>GET {{ base_url }}/api/od/building_emission_scale?building_by=rules</code></pre>
+      <div class="example-label">Example 2 — <code>building_by=dest</code></div>
+      <pre><code>GET {{ base_url }}/api/od/building_emission_scale?building_by=dest</code></pre>
+    </div>
+
+    <div class="endpoint" id="api-building-map">
+      <h3><span class="method">GET</span> <span class="path">/api/od/building_map</span></h3>
+      <p class="purpose"><strong>Purpose:</strong> Buildings with emissions inside a zone.</p>
+      <table>
+        <thead><tr><th>Parameter</th><th>Type</th><th>Default</th><th>Description</th></tr></thead>
+        <tbody>
+          <tr><td><code>zone_geo_id</code></td><td>string</td><td>—</td><td><strong>Required</strong> for data</td></tr>
+          <tr><td><code>building_by</code></td><td><code>rules</code> | <code>dest</code></td><td><code>rules</code></td><td>Rules-based or Destination zone</td></tr>
+          <tr><td><code>min_kg</code></td><td>float</td><td><code>0</code></td><td>Emissions floor (kg)</td></tr>
+          <tr><td><code>max_kg</code></td><td>float</td><td>—</td><td>Emissions ceiling (kg)</td></tr>
+          <tr><td><code>limit</code></td><td>int</td><td><code>50000</code></td><td>Max rows (100–500000)</td></tr>
+          <tr><td><code>island_only</code></td><td><code>0</code> | <code>1</code></td><td><code>1</code></td><td>Island filter</td></tr>
+          <tr><td><code>include_footprints</code></td><td><code>0</code> | <code>1</code></td><td>auto</td><td>Building outline per row</td></tr>
+          <tr><td><code>grid_cell_deg</code></td><td>float</td><td>—</td><td>Grid cluster size (degrees)</td></tr>
+        </tbody>
+      </table>
+      <div class="example-label">Example 1 — <code>building_by=rules</code>, zone 562</div>
+      <pre><code>GET {{ base_url }}/api/od/building_map?zone_geo_id=562&amp;building_by=rules&amp;limit=500</code></pre>
+      <div class="example-label">Example 2 — <code>building_by=dest</code>, zone 562</div>
+      <pre><code>GET {{ base_url }}/api/od/building_map?zone_geo_id=562&amp;building_by=dest&amp;min_kg=1&amp;limit=100</code></pre>
+    </div>
+
+    <div class="endpoint" id="api-building-fabric">
+      <h3><span class="method">GET</span> <span class="path">/api/od/zone_building_fabric</span></h3>
+      <p class="purpose"><strong>Purpose:</strong> All building outline shapes in a zone (grey backgrounds under the colored buildings layer).</p>
+      <div class="example-label">Example 1</div>
+      <pre><code>GET {{ base_url }}/api/od/zone_building_fabric?zone_geo_id=562</code></pre>
+      <div class="example-label">Example 2 — limited sample</div>
+      <pre><code>GET {{ base_url }}/api/od/zone_building_fabric?zone_geo_id=562&amp;limit=200</code></pre>
+    </div>
+
+    <div class="endpoint" id="api-building-footprint">
+      <h3><span class="method">GET</span> <span class="path">/api/od/building_footprint</span></h3>
+      <p class="purpose"><strong>Purpose:</strong> Single building outline shape by ID.</p>
+      <div class="example-label">Example 1</div>
+      <pre><code>GET {{ base_url }}/api/od/building_footprint?building_id=123456</code></pre>
+      <div class="example-label">Example 2 — query parameter <code>building_id</code></div>
+      <pre><code>GET {{ base_url }}/api/od/building_footprint?building_id=123456</code></pre>
+      <table>
+        <thead><tr><th>Param</th><th>value</th></tr></thead>
+        <tbody><tr><td><code>building_id</code></td><td><code>123456</code></td></tr></tbody>
+      </table>
+    </div>
+
+    <div class="endpoint" id="api-building-detail">
+      <h3><span class="method">GET</span> <span class="path">/api/od/building_detail</span></h3>
+      <p class="purpose"><strong>Purpose:</strong> KPI block for one building.</p>
+      <table>
+        <thead><tr><th>Parameter</th><th>Type</th><th>Required</th><th>Default</th><th>Description</th></tr></thead>
+        <tbody>
+          <tr><td><code>building_id</code></td><td>string</td><td><strong>yes</strong></td><td>—</td><td>Building ID</td></tr>
+          <tr><td><code>building_by</code></td><td><code>rules</code> | <code>dest</code></td><td>no</td><td><code>rules</code></td><td>Rules-based or Destination zone</td></tr>
+        </tbody>
+      </table>
+      <div class="example-label">Example 1 — <code>building_by=rules</code></div>
+      <pre><code>GET {{ base_url }}/api/od/building_detail?building_id=123456&amp;building_by=rules</code></pre>
+      <div class="example-label">Example 2 — <code>building_by=dest</code></div>
+      <pre><code>GET {{ base_url }}/api/od/building_detail?building_id=123456&amp;building_by=dest</code></pre>
+    </div>
+
+    <h2 id="order">7. Suggested test order</h2>
+    <ol>
+      <li><code>GET {{ base_url }}/api/health</code></li>
+      <li><code>GET {{ base_url }}/api/od/zone_map?zone_by=dest&amp;include_geojson=0</code></li>
+      <li><code>GET {{ base_url }}/api/od/zone_sidebar?geo_id=562&amp;zone_by=rules</code></li>
+      <li><code>GET {{ base_url }}/api/od/zone_incoming_flow?dest_geo_id=562&amp;limit=10</code></li>
+      <li><code>GET {{ base_url }}/api/od/building_map?zone_geo_id=562&amp;limit=50</code></li>
+      <li><code>GET {{ base_url }}/api/od/zones_boundary?island_only=0</code></li>
+    </ol>
+
+    <h2 id="troubleshoot">8. Troubleshooting</h2>
+    <table>
+      <thead><tr><th>Symptom</th><th>Check</th></tr></thead>
+      <tbody>
+        <tr><td><code>Failed to render environment variables: base_url</code> or <code>bad/illegal format</code></td><td><strong>Insomnia:</strong> one <strong>Text</strong> row only; delete extra JSON rows; select <strong>Base Environment</strong></td></tr>
+        <tr><td>Connection refused</td><td>Run <code>start_dashboard.ps1</code></td></tr>
+        <tr><td><code>"ok": false</code> in health</td><td>PostgreSQL / <code>deploy.env</code></td></tr>
+        <tr><td><code>503 missing_table</code></td><td>Restore DB dump into <code>od_dashboard</code> (see <a href="DASHBOARD_USER_MANUAL.md">Dashboard User Manual</a>; dump filename may vary)</td></tr>
+        <tr><td>Empty zones or flows</td><td>Try <code>zone_by=dest</code> if you used <code>rules</code>, or vice versa</td></tr>
+        <tr><td>Slow / huge response</td><td><code>include_geojson=0</code>; add <code>limit</code></td></tr>
+        <tr><td><code>400 geo_id required</code></td><td>Add <code>geo_id</code> or <code>dest_geo_id</code></td></tr>
+      </tbody>
+    </table>
+
+    <h2 id="quickref">9. Quick reference</h2>
+    <table>
+      <thead><tr><th>Endpoint</th><th>Example with parameters</th></tr></thead>
+      <tbody>
+        <tr><td>Health</td><td><code>{{ base_url }}/api/health</code></td></tr>
+        <tr><td>Island boundary</td><td><code>{{ base_url }}/api/montreal_boundary.geojson?buffer_m=500</code></td></tr>
+        <tr><td>Zone codes</td><td><code>{{ base_url }}/api/od/zone_codes</code></td></tr>
+        <tr><td>CMM boundaries</td><td><code>{{ base_url }}/api/od/zones_boundary?island_only=0</code></td></tr>
+        <tr><td>Zone map</td><td><code>{{ base_url }}/api/od/zone_map?zone_by=dest&amp;include_geojson=0</code></td></tr>
+        <tr><td>Both zone maps</td><td><code>{{ base_url }}/api/od/zone_maps?include_geojson=0</code></td></tr>
+        <tr><td>Zone sidebar</td><td><code>{{ base_url }}/api/od/zone_sidebar?geo_id=562&amp;zone_by=rules</code></td></tr>
+        <tr><td>Incoming flows</td><td><code>{{ base_url }}/api/od/zone_incoming_flow?dest_geo_id=562&amp;limit=10</code></td></tr>
+        <tr><td>All flows (bulk)</td><td><code>{{ base_url }}/api/od/zone_incoming_flows_all?limit=5</code></td></tr>
+        <tr><td>Building scale</td><td><code>{{ base_url }}/api/od/building_emission_scale?building_by=rules</code></td></tr>
+        <tr><td>Buildings in zone</td><td><code>{{ base_url }}/api/od/building_map?zone_geo_id=562&amp;limit=500</code></td></tr>
+        <tr><td>Zone building outlines</td><td><code>{{ base_url }}/api/od/zone_building_fabric?zone_geo_id=562</code></td></tr>
+        <tr><td>One footprint</td><td><code>{{ base_url }}/api/od/building_footprint?building_id=...</code></td></tr>
+        <tr><td>Building KPIs</td><td><code>{{ base_url }}/api/od/building_detail?building_id=...&amp;building_by=rules</code></td></tr>
+      </tbody>
+    </table>
+  </div>
+</body>
+</html>

@@ -402,6 +402,7 @@
     let bootCache = null;
     let selectedZoneId = null;
     let selectedZoneBy = null;
+    let selectedZoneByCategory = null;
 
     function activeViewKey() {
       if (window.DashNav && DashNav.readAttribution('rules') === 'dest') return 'dest';
@@ -461,7 +462,6 @@
     const EMISSION_HEAT_GRADIENT = { 0.1: '#22c55e', 0.35: '#a3e635', 0.55: '#fde047', 0.75: '#fb923c', 1: '#dc2626' };
     const ZONE_NO_TRIP_FILL = '#475569';
     const ZONE_NO_TRIP_STROKE = '#64748b';
-    const ISLAND_OUTLINE_BUFFER_M = 1000;
 
     function zoneDisplayTrips(props) {
       const p = props || {};
@@ -543,6 +543,36 @@
       if (n >= 10) return n.toFixed(1) + ' t';
       return n.toFixed(2) + ' t';
     }
+    function emissionsGramsFromRow(rowOrG) {
+      if (rowOrG && typeof rowOrG === 'object') {
+        const g = Number(rowOrG.total_emissions_g_weighted != null
+          ? rowOrG.total_emissions_g_weighted
+          : rowOrG.total_emissions_g);
+        return Number.isFinite(g) ? g : 0;
+      }
+      const n = Number(rowOrG);
+      return Number.isFinite(n) ? n : 0;
+    }
+    function emissionsChartValue(rowOrG) {
+      return emissionsGramsFromRow(rowOrG) / 1000;
+    }
+    function formatEmissionsChart(v) {
+      const n = Number(v);
+      if (!Number.isFinite(n) || n <= 0) return '0 kg CO₂e';
+      if (n >= 1e6) return (n / 1e6).toFixed(1) + 'M kg CO₂e';
+      if (n >= 1e3) return (n / 1e3).toFixed(1) + 'k kg CO₂e';
+      return Math.round(n).toLocaleString() + ' kg CO₂e';
+    }
+    function emissionsDatasetLabel() {
+      return 'kg CO₂e';
+    }
+    function formatDistanceChart(km) {
+      const v = Number(km);
+      if (!Number.isFinite(v) || v <= 0) return '0 km';
+      if (v >= 1e6) return (v / 1e6).toFixed(1) + 'M km';
+      if (v >= 1e3) return (v / 1e3).toFixed(1) + 'k km';
+      return Math.round(v).toLocaleString() + ' km';
+    }
     function formatTripsChart(n) {
       const v = Number(n);
       if (!Number.isFinite(v) || v < 0) return '0';
@@ -556,12 +586,17 @@
       const arr = ctx.chart.data.datasets[0].data;
       const total = arr.reduce((a, b) => a + b, 0);
       const pct = total ? ((t / total) * 100).toFixed(1) : '0';
-      return label + ': ' + formatEmissionsTonnes(t) + ' (' + pct + '%)';
+      return label + ': ' + formatEmissionsChart(t) + ' (' + pct + '%)';
     }
     function barEmissionsTooltipLabel(ctx) {
       const label = ctx.label || '';
       const t = Number(ctx.parsed && ctx.parsed.y != null ? ctx.parsed.y : ctx.parsed) || 0;
-      return label + ': ' + formatEmissionsTonnes(t);
+      return label + ': ' + formatEmissionsChart(t);
+    }
+    function barDistanceTooltipLabel(ctx) {
+      const label = ctx.label || '';
+      const v = Number(ctx.parsed && ctx.parsed.y != null ? ctx.parsed.y : ctx.parsed) || 0;
+      return label + ': ' + formatDistanceChart(v);
     }
     function barTripsTooltipLabel(ctx) {
       const label = ctx.label || '';
@@ -607,12 +642,64 @@
       return { zones, geojson: gj, zoneDistById: {} };
     }
 
+    function tripCountFromCategory(d) {
+      if (d.trips_weighted != null && Number(d.trips_weighted) > 0) return d.trips_weighted;
+      return d.trips;
+    }
+
+    function scaleCategoriesForZone(islandCats, zoneStats) {
+      if (!islandCats || !islandCats.length || !zoneStats) return [];
+      const zEm = Number(zoneStats.total_emissions_g) || 0;
+      const zTrips = Number(zoneStats.trips) || 0;
+      const zKm = Number(zoneStats.total_distance_km) || 0;
+      const islandEm = islandCats.reduce((a, c) => a + (Number(c.total_emissions_g) || 0), 0);
+      const islandTrips = islandCats.reduce((a, c) => a + (Number(c.trips) || 0), 0);
+      const islandKm = islandCats.reduce((a, c) => a + (Number(c.total_distance_km) || 0), 0);
+      if (islandEm <= 0 || zEm <= 0) return [];
+      const emisRatio = zEm / islandEm;
+      const tripsRatio = islandTrips > 0 ? (zTrips / islandTrips) : emisRatio;
+      const kmRatio = islandKm > 0 ? (zKm / islandKm) : emisRatio;
+      return islandCats.map(c => ({
+        category: c.category,
+        trips: (Number(c.trips) || 0) * tripsRatio,
+        total_emissions_g: (Number(c.total_emissions_g) || 0) * emisRatio,
+        total_distance_km: (Number(c.total_distance_km) || 0) * kmRatio,
+      }));
+    }
+
+    function updateChartTitles(zoneLabel) {
+      const suffix = zoneLabel ? (' · ' + zoneLabel) : '';
+      [
+        { sel: '#chart-emissions', base: 'Emissions by travel reason (kg CO₂e)' },
+        { sel: '#chart-donut', base: 'Emissions share' },
+        { sel: '#chart-trips', base: 'Trips by travel reason' },
+        { sel: '#chart-distance', base: 'Distance by travel reason (km)' },
+      ].forEach(item => {
+        const canvas = document.querySelector(item.sel);
+        const card = canvas && canvas.closest ? canvas.closest('.card') : null;
+        const h = card && card.querySelector ? card.querySelector('h3') : null;
+        if (h) h.textContent = item.base + suffix;
+      });
+    }
+
+    function applySidebarCharts(byCategory, zoneStats, zoneLabel) {
+      const islandCats = bootCache && bootCache.by_category;
+      const cats = (byCategory && byCategory.length)
+        ? byCategory
+        : scaleCategoriesForZone(islandCats, zoneStats);
+      if (cats && cats.length) {
+        selectedZoneByCategory = cats;
+        initCharts(cats);
+        updateChartTitles(zoneLabel || '');
+      }
+    }
+
     function initCharts(byCategory) {
       if (!byCategory || !byCategory.length) return;
       const sorted = [...byCategory].sort((a, b) => (b.total_emissions_g || 0) - (a.total_emissions_g || 0));
       const labels = sorted.map(d => shortChartLabel(d.category, 14));
-      const emissionsData = sorted.map(d => totalEmissionsTonnes(d.total_emissions_g));
-      const tripsData = sorted.map(d => d.trips);
+      const emissionsData = sorted.map(d => emissionsChartValue(d));
+      const tripsData = sorted.map(d => tripCountFromCategory(d));
       const distanceData = sorted.map(d => d.total_distance_km);
       const totalEmissions = emissionsData.reduce((a, b) => a + b, 0);
       const totalTrips = tripsData.reduce((a, b) => a + b, 0);
@@ -628,13 +715,26 @@
         },
         scales: {
           x: { ticks: { color: '#8b9cb8', maxRotation: 45, minRotation: 0, autoSkip: false }, grid: { color: 'rgba(148,163,184,0.08)' } },
-          y: { beginAtZero: true, ticks: { color: '#8b9cb8', callback: (v) => formatEmissionsTonnes(v) }, grid: { color: 'rgba(148,163,184,0.08)' } }
+          y: { beginAtZero: true, ticks: { color: '#8b9cb8', callback: (v) => formatEmissionsChart(v) }, grid: { color: 'rgba(148,163,184,0.08)' } }
+        }
+      };
+      const distanceOpts = {
+        responsive: true, maintainAspectRatio: false, animation: anim,
+        plugins: {
+          legend: { display: false },
+          tooltip: { callbacks: { label: barDistanceTooltipLabel } },
+          datalabels: { color: '#e8eef7', font: { size: 9, weight: '500' }, anchor: 'end', align: 'end',
+            formatter: (v) => (!totalDistance ? '' : ((v / totalDistance) * 100).toFixed(1) + '%') }
+        },
+        scales: {
+          x: { ticks: { color: '#8b9cb8', maxRotation: 45, minRotation: 0, autoSkip: false }, grid: { color: 'rgba(148,163,184,0.08)' } },
+          y: { beginAtZero: true, ticks: { color: '#8b9cb8', callback: (v) => formatDistanceChart(v) }, grid: { color: 'rgba(148,163,184,0.08)' } }
         }
       };
       if (chartEmissions) chartEmissions.destroy();
       chartEmissions = new Chart(document.getElementById('chart-emissions'), {
         type: 'bar',
-        data: { labels, datasets: [{ label: 't CO₂', data: emissionsData, backgroundColor: bgColors, borderRadius: 6 }] },
+        data: { labels, datasets: [{ label: emissionsDatasetLabel(), data: emissionsData, backgroundColor: bgColors, borderRadius: 6 }] },
         options: { ...commonOpts, plugins: { ...commonOpts.plugins, datalabels: { ...commonOpts.plugins.datalabels, anchor: 'end', align: 'end', formatter: (v) => (!totalEmissions ? '' : ((v / totalEmissions) * 100).toFixed(1) + '%') } } },
         plugins: [ChartDataLabels]
       });
@@ -682,7 +782,7 @@
       chartDistance = new Chart(document.getElementById('chart-distance'), {
         type: 'bar',
         data: { labels, datasets: [{ label: 'km', data: distanceData, backgroundColor: bgColors, borderRadius: 6 }] },
-        options: { ...commonOpts, plugins: { ...commonOpts.plugins, datalabels: { ...commonOpts.plugins.datalabels, anchor: 'end', align: 'end', formatter: (v) => (!totalDistance ? '' : ((v / totalDistance) * 100).toFixed(1) + '%') } } },
+        options: distanceOpts,
         plugins: [ChartDataLabels]
       });
     }
@@ -884,7 +984,6 @@
     }
 
     let cmmZonesBoundaryGeojson = null;
-    let montrealBoundaryGeojson = null;
 
     function createMapView(spec) {
       const m = L.map(spec.elId).setView([45.52, -73.68], 10);
@@ -917,19 +1016,11 @@
 
     function applyMontrealBoundaryToView(key) {
       const v = mapViews[key];
-      if (!v || !v.map || !montrealBoundaryGeojson) return;
-      if (v.boundaryLayer) { v.map.removeLayer(v.boundaryLayer); v.boundaryLayer = null; }
-      v.boundaryLayer = L.geoJSON(montrealBoundaryGeojson, {
-        interactive: false,
-        style: () => ({
-          color: '#14b8a6',
-          weight: 2.5,
-          opacity: 0.92,
-          fill: false,
-          fillOpacity: 0,
-          dashArray: '10 6',
-        }),
-      }).addTo(v.map);
+      if (!v || !v.map) return;
+      if (v.boundaryLayer) {
+        v.map.removeLayer(v.boundaryLayer);
+        v.boundaryLayer = null;
+      }
     }
 
     function applyCmmBoundaryToView(key) {
@@ -953,9 +1044,9 @@
       const v = mapViews[key];
       if (!v || !v.map) return;
       v.map.invalidateSize();
-      if (v.boundaryLayer) {
+      if (v.zonesBoundaryLayer) {
         try {
-          const b = v.boundaryLayer.getBounds();
+          const b = v.zonesBoundaryLayer.getBounds();
           if (b && b.isValid && b.isValid()) {
             v.map.fitBounds(b.pad(0.05), { maxZoom: 11, animate: false });
             return;
@@ -1006,12 +1097,7 @@
     }
 
     async function loadMontrealBoundary() {
-      try {
-        const gj = await fetchJson('/api/montreal_boundary.geojson?buffer_m=' + ISLAND_OUTLINE_BUFFER_M);
-        if (!gj || gj.type !== 'FeatureCollection' || !gj.features || !gj.features.length) return;
-        montrealBoundaryGeojson = gj;
-        MAP_SPECS.forEach(spec => applyMontrealBoundaryToView(spec.key));
-      } catch (e) { console.warn('Montreal boundary:', e); }
+      /* Island buffer outline intentionally hidden — zone mesh boundaries remain visible. */
     }
 
     function initMaps() {
@@ -1075,6 +1161,7 @@
       selectedZoneBy = zoneBy === 'dest' ? 'dest' : 'rules';
       populateZonePanel(selectedZoneId, selectedZoneBy);
       refreshActiveMapView();
+      notifyZoneSelection(selectedZoneId, selectedZoneBy);
     }
 
     function clearZonePanel() {
@@ -1083,6 +1170,7 @@
       const panel = document.getElementById('zonePanel');
       if (panel) panel.classList.remove('open');
       refreshActiveMapView();
+      notifyZoneSelection('', 'rules');
     }
 
     function bindZoneSelectClick(layer, geoId, zoneBy) {
@@ -1208,6 +1296,94 @@
       applyKpiBlock('dest', boot.stats_dest);
     }
 
+    function zoneStatsFromRow(row, geoId) {
+      const r = row || {};
+      const trips = Number(r.trips) || 0;
+      const tripsW = Number(r.trips_weighted != null ? r.trips_weighted : trips) || 0;
+      const emis = Number(r.total_emissions_g) || 0;
+      const emisW = Number(r.total_emissions_g_weighted != null ? r.total_emissions_g_weighted : emis) || 0;
+      const km = Number(r.total_distance_km) || 0;
+      const kmW = Number(r.total_distance_km_weighted != null ? r.total_distance_km_weighted : km) || 0;
+      return {
+        geo_id: String(geoId),
+        trips,
+        trips_weighted: tripsW,
+        total_emissions_g: emis,
+        total_emissions_g_weighted: emisW,
+        total_distance_km: km,
+        total_distance_km_weighted: kmW,
+        avg_emissions_g_per_trip: trips > 0 ? emis / trips : 0,
+        kpi_scope: 'zone',
+      };
+    }
+
+    function notifyZoneSelection(geoId, zoneBy) {
+      const gid = String(geoId || '').trim();
+      let stats = null;
+      let zoneLabel = '';
+      if (gid) {
+        const viewKey = zoneBy === 'dest' ? 'dest' : 'rules';
+        const payload = mapViews[viewKey] && mapViews[viewKey].payload;
+        const row = findZoneRow(gid, payload) || {};
+        stats = zoneStatsFromRow(row, gid);
+        zoneLabel = zoneCt(gid, row);
+      }
+      if (IS_EMBED && window.parent !== window) {
+        window.parent.postMessage({
+          type: 'dash-zone-select',
+          geo_id: gid,
+          zone_by: zoneBy || 'rules',
+          clear: !gid,
+          stats,
+          zone_label: zoneLabel,
+        }, '*');
+        return;
+      }
+      refreshSidebarForZone(geoId, zoneBy);
+    }
+
+    async function refreshSidebarForZone(geoId, zoneBy) {
+      const gid = String(geoId || '').trim();
+      if (!gid) {
+        selectedZoneByCategory = null;
+        if (bootCache) {
+          applyDualKpiStats(bootCache);
+          if (bootCache.by_category) {
+            initCharts(bootCache.by_category);
+            updateChartTitles('');
+          }
+        }
+        return;
+      }
+      const zb = zoneBy === 'dest' ? 'dest' : 'rules';
+      const viewKey = zb === 'dest' ? 'dest' : 'rules';
+      const payload = mapViews[viewKey] && mapViews[viewKey].payload;
+      const row = findZoneRow(gid, payload) || {};
+      const instantStats = zoneStatsFromRow(row, gid);
+      const zoneLabel = zoneCt(gid, row);
+      applyKpiBlock(zb, instantStats);
+      applySidebarCharts(null, instantStats, zoneLabel);
+      try {
+        const data = await fetchJson(
+          '/api/od/zone_sidebar?geo_id=' + encodeURIComponent(gid) + '&zone_by=' + zb
+        );
+        if (data && data.stats) {
+          applyKpiBlock(zb, data.stats);
+          if (bootCache) {
+            const other = zb === 'dest' ? 'rules' : 'dest';
+            applyKpiBlock(other, bootCache[other === 'dest' ? 'stats_dest' : 'stats_rules'] || bootCache.stats);
+          }
+        }
+        applySidebarCharts(
+          data && data.by_category,
+          (data && data.stats) || instantStats,
+          (data && data.zone_label) || zoneLabel
+        );
+      } catch (e) {
+        console.warn('zone sidebar:', e);
+      }
+    }
+
     function invalidateActiveMap() {
       const activeV = mapViews[activeViewKey()];
       if (activeV && activeV.map) {
@@ -1224,7 +1400,7 @@
       const zonesPromise = refreshZones().catch(err => { console.error('zone maps:', err); return err; });
       const bootPromise = IS_EMBED
         ? Promise.resolve(null)
-        : fetchJson('/api/od/bootstrap').catch(err => { console.error('bootstrap:', err); return null; });
+        : fetchJson('/api/od/home').catch(err => { console.error('home:', err); return null; });
       const zoneCodesPromise = fetchJson('/api/zone_codes').catch(() => null);
       const [, , boot, zoneCodes] = await Promise.all([
         loadMontrealBoundary(), loadCmmZoneBoundaries(), bootPromise, zoneCodesPromise,
@@ -1306,7 +1482,7 @@
         const p = document.createElement('p');
         p.className = 'err';
         p.textContent = 'OD dashboard failed to load.\n\n' + (e && e.message ? e.message : String(e)) +
-          '\n\nIf you see a 503 missing_table error, run: python scripts/preprocess_dashboard_od10_zone_emissions.py';
+          '\n\nIf you see a 503 missing_table error, restore data/db/od_dashboard_tables.dump and confirm PGDATABASE=od_dashboard.';
         document.querySelector('.app').appendChild(p);
         console.error(e);
       }

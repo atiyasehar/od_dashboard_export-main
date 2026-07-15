@@ -1,12 +1,7 @@
-"""Flask server for the PopGen emissions dashboard (PM23 survey / precomputed tables).
+"""Flask server for the OD emissions dashboard (PM23 survey / precomputed tables).
 
-Serves ``Data/dashboard/`` and ``/api/od/*`` endpoints. Reads precomputed tables in
+Serves ``dashboard/`` and ``/api/od/*`` endpoints. Reads precomputed tables in
 PostgreSQL.
-
-Portable export for another machine::
-
-  python scripts/bundle_od_dashboard.py pack
-  # copy Data/od_dashboard_export/ to target, then unpack + run (see bundle README)
 
 Run::
 
@@ -36,6 +31,8 @@ except ImportError:  # CORS optional; same-origin works without it
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import dashboard_server as _dashboard_server  # noqa: E402
+
+from zone_map_anchors import fetch_zone_flow_anchors, patch_flow_payload_anchors  # noqa: E402
 
 from dashboard_server import (  # noqa: E402
     CMM_BOUNDS,
@@ -67,6 +64,8 @@ from dashboard_server import (  # noqa: E402
     _montreal_island_geometry_geojson_for_postgis,
     _montreal_boundary_geojson_fc,
     _zones_geom_table,
+    _zones_geom_join,
+    _zone_code_maps_for_geom,
     ensure_zones_geom_compat,
     _normalize_building_by,
     _parse_building_grid_cell_deg,
@@ -614,6 +613,106 @@ def _od10_flow_metric_cols(zone_by: str) -> tuple[str, str, str]:
     return "trips_rules", "emissions_g_rules", "distance_km_rules"
 
 
+def _od10_flows_nontrivial_sql(trips_c: str, emis_c: str, alias: str = "f") -> str:
+    """Skip precomputed OD rows with zero trips and zero emissions (rank padding)."""
+    p = f"{alias}."
+    return f"AND (COALESCE({p}{trips_c}, 0) > 0 OR COALESCE({p}{emis_c}, 0) > 0)"
+
+
+def _od10_interzonal_flow_filter_sql(alias: str = "f") -> str:
+    """Exclude same-zone (intra) OD pairs from inter-zonal flow lists."""
+    p = f"{alias}."
+    return f"AND {p}orig_geo_id::text IS DISTINCT FROM {p}dest_geo_id::text"
+
+
+def _od10_zone_dest_totals(cur, zone_by: str, dest_id: str) -> dict | None:
+    """Zone-wide KPI totals for a destination (includes intra-zone trips)."""
+    zone_t = _od10_zone_table(cur, zone_by)
+    if not zone_t:
+        return None
+    gid = str(dest_id or "").strip()
+    if not gid:
+        return None
+    cols = _od10_zone_col_names(cur, zone_t, zone_by)
+    trips_c, emis_c = _od10_zone_kpi_cols(cur, zone_t, zone_by=zone_by)
+    if _od10_metrics_weighted() and _column_exists(cur, zone_t, cols["distance_km_weighted"]):
+        dist_c = cols["distance_km_weighted"]
+    else:
+        dist_c = cols["distance_km"]
+    cur.execute(
+        f"""
+        SELECT {trips_c}, {emis_c}, COALESCE({dist_c}, 0)::double precision
+        FROM {SCHEMA}.{zone_t}
+        WHERE geo_id::text = %s
+        """,
+        (gid,),
+    )
+    row = cur.fetchone()
+    if not row:
+        return None
+    return {
+        "trips": float(row[0] or 0),
+        "total_emissions_g": float(row[1] or 0),
+        "total_distance_km": float(row[2] or 0),
+    }
+
+
+def _od10_intra_zone_flow(
+    dest_id: str,
+    zone_totals: dict | None,
+    incoming_trips: float,
+    incoming_emis: float,
+    incoming_km: float,
+) -> dict | None:
+    """Intra-zone share = zone total minus inter-zonal incoming flows."""
+    if not zone_totals:
+        return None
+    trips = max(0.0, float(zone_totals.get("trips") or 0) - float(incoming_trips or 0))
+    emis = max(0.0, float(zone_totals.get("total_emissions_g") or 0) - float(incoming_emis or 0))
+    km = max(0.0, float(zone_totals.get("total_distance_km") or 0) - float(incoming_km or 0))
+    if trips <= 0 and emis <= 0:
+        return None
+    gid = str(dest_id)
+    return {
+        "orig_geo_id": gid,
+        "dest_geo_id": gid,
+        "is_intra_zone": True,
+        "trips": trips,
+        "total_emissions_g": emis,
+        "total_distance_km": round(km, 2),
+    }
+
+
+def _od10_enrich_incoming_payload(cur, payload: dict, zone_by: str) -> None:
+    """Attach zone totals and intra-zone flow derived from zone KPI minus incoming."""
+    dest_id = str(payload.get("dest_geo_id") or "").strip()
+    if not dest_id:
+        return
+    zone_totals = _od10_zone_dest_totals(cur, zone_by, dest_id)
+    if zone_totals:
+        payload["dest_zone_trips"] = zone_totals["trips"]
+        payload["dest_zone_emissions_g"] = zone_totals["total_emissions_g"]
+        payload["dest_zone_distance_km"] = zone_totals["total_distance_km"]
+        if payload.get("dest_rules_trips") is None:
+            payload["dest_rules_trips"] = zone_totals["trips"]
+        if payload.get("dest_rules_emissions_g") is None:
+            payload["dest_rules_emissions_g"] = zone_totals["total_emissions_g"]
+    inc_trips = float(payload.get("total_incoming_trips") or 0)
+    inc_emis = float(payload.get("total_incoming_emissions_g") or 0)
+    inc_km = float(payload.get("total_incoming_distance_km") or 0)
+    intra = _od10_intra_zone_flow(dest_id, zone_totals, inc_trips, inc_emis, inc_km)
+    if intra:
+        dest_lat = payload.get("dest_lat")
+        dest_lon = payload.get("dest_lon")
+        intra["orig_lat"] = dest_lat
+        intra["orig_lon"] = dest_lon
+        intra["dest_lat"] = dest_lat
+        intra["dest_lon"] = dest_lon
+        payload["intra_zone"] = intra
+    else:
+        payload["intra_zone"] = None
+
+
 def _od10_building_emissions_table(cur) -> str | None:
     return _resolve_od10_table(cur, OD10_BUILDING_EMISSIONS_CANDIDATES)
 
@@ -722,10 +821,20 @@ def _od10_dest_anchor_coords(cur, dest_id: str) -> tuple[float | None, float | N
     anchor_t = _resolve_od10_table(cur, OD10_ANCHOR_CANDIDATES)
     if not anchor_t:
         return None, None
-    cur.execute(
-        f"SELECT dest_lat, dest_lon FROM {SCHEMA}.{anchor_t} WHERE geo_id = %s",
-        (dest_id,),
-    )
+    has_map = _column_exists(cur, anchor_t, "map_lat") and _column_exists(cur, anchor_t, "map_lon")
+    if has_map:
+        cur.execute(
+            f"""
+            SELECT COALESCE(map_lat, dest_lat), COALESCE(map_lon, dest_lon)
+            FROM {SCHEMA}.{anchor_t} WHERE geo_id = %s
+            """,
+            (dest_id,),
+        )
+    else:
+        cur.execute(
+            f"SELECT dest_lat, dest_lon FROM {SCHEMA}.{anchor_t} WHERE geo_id = %s",
+            (dest_id,),
+        )
     row = cur.fetchone()
     if not row:
         return None, None
@@ -797,10 +906,9 @@ def api_health():
             cur = conn.cursor()
             building_stats = _od10_building_db_stats(cur)
             zone_label_stats = {
-                "zones_csv": str(_dashboard_server._zones_csv_path()),
-                "zones_csv_rows": len(_zone_code_index()),
-                "geo_zone_sp23_csv": str(_dashboard_server._geo_sp23_csv_path()),
-                "geo_zone_sp23_exists": _dashboard_server._geo_sp23_csv_path().exists(),
+                "zones_table": "zones_geom",
+                "zones_geom_rows": _dashboard_server._zones_geom_row_count(cur),
+                "zone_codes_loaded": len(_zone_code_index()),
                 "zone_names_loaded": len(_zone_name_index()),
                 "sample_label_562": _zone_label_for("562"),
             }
@@ -861,7 +969,13 @@ def api_montreal_boundary():
 @app.route("/api/od/zone_codes")
 @app.route("/api/zone_codes")
 def api_od10_zone_codes():
-    return jsonify({"zone_codes": _zone_code_index(), "zone_names": _zone_name_index()})
+    conn = get_conn()
+    try:
+        cur = conn.cursor()
+        zone_codes, zone_names = _zone_code_maps_for_geom(cur)
+    finally:
+        conn.close()
+    return jsonify({"zone_codes": zone_codes, "zone_names": zone_names})
 
 
 @app.route("/api/od/zones_boundary")
@@ -1310,6 +1424,7 @@ def api_od10_zone_maps():
         conn.close()
 
 
+@app.route("/api/od/home")
 @app.route("/api/od/bootstrap")
 @_od10_api_errors
 def api_od10_bootstrap():
@@ -1330,49 +1445,7 @@ def api_od10_bootstrap():
         stats = _od10_stats_from_table(cur, zone_tab, zone_by="rules")
         stats["table"] = zone_tab
         by_category: list[dict] = []
-        cats_tab = _resolve_od10_table(cur, OD10_CATEGORIES_CANDIDATES)
-        if cats_tab:
-            has_w = _od10_has_weighted_columns(cur, cats_tab)
-            if has_w:
-                cur.execute(
-                    f"""
-                    SELECT category, trips, trips_weighted, emissions_g, emissions_g_weighted,
-                           distance_km, distance_km_weighted
-                    FROM {SCHEMA}.{cats_tab}
-                    ORDER BY emissions_g DESC
-                    """
-                )
-                for cat, t, tw, e, ew, d, dw in cur.fetchall():
-                    e = float(e or 0)
-                    row = {
-                        "category": cat,
-                        "trips": float(t or 0),
-                        "trips_legs": float(t or 0),
-                        "trips_weighted": float(tw or 0),
-                        "total_emissions_g": e,
-                        "total_emissions_g_legs": e,
-                        "total_emissions_g_weighted": float(ew or 0),
-                        "total_emissions_tonnes": e / 1e6,
-                        "total_emissions_tonnes_weighted": float(ew or 0) / 1e6,
-                        "total_distance_km": float(d or 0),
-                        "total_distance_km_weighted": float(dw or 0),
-                    }
-                    by_category.append(_od10_promote_weighted_row(row))
-            else:
-                cur.execute(
-                    f"SELECT category, trips, emissions_g, distance_km "
-                    f"FROM {SCHEMA}.{cats_tab} ORDER BY emissions_g DESC"
-                )
-                for cat, t, e, d in cur.fetchall():
-                    e = float(e or 0)
-                    by_category.append({
-                        "category": cat,
-                        "trips": float(t or 0),
-                        "trips_legs": float(t or 0),
-                        "total_emissions_g": e,
-                        "total_emissions_tonnes": e / 1e6,
-                        "total_distance_km": float(d or 0),
-                    })
+        by_category = _od10_fetch_global_by_category(cur)
         dest_stats = None
         if _od10_zone_unified_table(cur):
             dest_stats = _od10_stats_from_table(cur, zone_tab, zone_by="dest")
@@ -1403,6 +1476,7 @@ def api_od10_bootstrap():
             building_scale_dest = _od10_building_emission_scale_bounds(
                 cur, detail_tab, building_by="dest"
             )
+        zone_codes, zone_names = _zone_code_maps_for_geom(cur)
         return jsonify({
             "stats": primary_stats,
             "stats_rules": stats,
@@ -1412,14 +1486,396 @@ def api_od10_bootstrap():
             "survey_funnel": survey_funnel,
             "building_emission_scale_rules": building_scale_rules,
             "building_emission_scale_dest": building_scale_dest,
-            "zone_codes": _zone_code_index(),
-            "zone_names": _zone_name_index(),
+            "zone_codes": zone_codes,
+            "zone_names": zone_names,
             "source": "od",
             "metrics_mode": "weighted" if _od10_metrics_weighted() else "legs",
             "metrics_note": _od10_metrics_note(),
         })
     finally:
         conn.close()
+
+
+def _od10_single_zone_stats(cur, geo_id: str, *, zone_by: str) -> dict | None:
+    """KPI block for one zone row from zone_emissions_od10."""
+    ztab = _od10_zone_unified_table(cur)
+    if not ztab:
+        return None
+    gid = str(geo_id or "").strip()
+    if not gid:
+        return None
+    mode = "dest" if (zone_by or "rules").strip().lower() == "dest" else "rules"
+    cols = _od10_zone_col_names(cur, ztab, mode)
+    if _od10_has_weighted_columns(cur, ztab, zone_by=mode):
+        cur.execute(
+            f"""
+            SELECT COALESCE({cols['trips']}, 0)::double precision,
+                   COALESCE({cols['trips_weighted']}, 0)::double precision,
+                   COALESCE({cols['emissions_g']}, 0)::double precision,
+                   COALESCE({cols['emissions_g_weighted']}, 0)::double precision,
+                   COALESCE({cols['distance_km']}, 0)::double precision,
+                   COALESCE({cols['distance_km_weighted']}, 0)::double precision
+            FROM {SCHEMA}.{ztab}
+            WHERE geo_id::text = %s
+            """,
+            (gid,),
+        )
+        trips, trips_w, emis_g, emis_w, dist_km, dist_w = cur.fetchone() or (0, 0, 0, 0, 0, 0)
+    else:
+        cur.execute(
+            f"""
+            SELECT COALESCE({cols['trips']}, 0)::double precision,
+                   COALESCE({cols['emissions_g']}, 0)::double precision,
+                   COALESCE({cols['distance_km']}, 0)::double precision
+            FROM {SCHEMA}.{ztab}
+            WHERE geo_id::text = %s
+            """,
+            (gid,),
+        )
+        row = cur.fetchone() or (0, 0, 0)
+        trips, emis_g, dist_km = row
+        trips_w = float(trips or 0)
+        emis_w = float(emis_g or 0)
+        dist_w = float(dist_km or 0)
+    trips = float(trips or 0)
+    trips_w = float(trips_w or 0)
+    emis_g = float(emis_g or 0)
+    emis_w = float(emis_w or 0)
+    dist_km = float(dist_km or 0)
+    dist_w = float(dist_w or 0)
+    out = {
+        "geo_id": gid,
+        "zone_by": mode,
+        "trips": trips,
+        "trips_legs": trips,
+        "trips_weighted": trips_w,
+        "total_emissions_g": emis_g,
+        "total_emissions_g_legs": emis_g,
+        "total_emissions_g_weighted": emis_w,
+        "total_emissions_tonnes": emis_g / 1e6,
+        "total_emissions_tonnes_weighted": emis_w / 1e6,
+        "total_distance_km": dist_km,
+        "total_distance_km_legs": dist_km,
+        "total_distance_km_weighted": dist_w,
+        "avg_emissions_g_per_trip": (emis_g / trips) if trips else 0.0,
+        "avg_emissions_g_per_trip_weighted": (emis_w / trips_w) if trips_w else 0.0,
+        "kpi_scope": "zone",
+    }
+    out["metrics_mode"] = "weighted" if _od10_metrics_weighted() else "legs"
+    return _od10_promote_weighted_row(out)
+
+
+def _od10_fetch_global_by_category(cur) -> list[dict]:
+    """Island-wide travel-reason rows for sidebar charts."""
+    cats_tab = _resolve_od10_table(cur, OD10_CATEGORIES_CANDIDATES)
+    if not cats_tab:
+        return []
+    out: list[dict] = []
+    if _od10_has_weighted_columns(cur, cats_tab):
+        cur.execute(
+            f"""
+            SELECT category, trips, trips_weighted, emissions_g, emissions_g_weighted,
+                   distance_km, distance_km_weighted
+            FROM {SCHEMA}.{cats_tab}
+            ORDER BY emissions_g DESC
+            """
+        )
+        for cat, t, tw, e, ew, d, dw in cur.fetchall():
+            e = float(e or 0)
+            row = {
+                "category": cat,
+                "trips": float(t or 0),
+                "trips_legs": float(t or 0),
+                "trips_weighted": float(tw or 0),
+                "total_emissions_g": e,
+                "total_emissions_g_legs": e,
+                "total_emissions_g_weighted": float(ew or 0),
+                "total_emissions_tonnes": e / 1e6,
+                "total_emissions_tonnes_weighted": float(ew or 0) / 1e6,
+                "total_distance_km": float(d or 0),
+                "total_distance_km_weighted": float(dw or 0),
+            }
+            out.append(_od10_promote_weighted_row(row))
+    else:
+        cur.execute(
+            f"SELECT category, trips, emissions_g, distance_km "
+            f"FROM {SCHEMA}.{cats_tab} ORDER BY emissions_g DESC"
+        )
+        for cat, t, e, d in cur.fetchall():
+            e = float(e or 0)
+            out.append({
+                "category": cat,
+                "trips": float(t or 0),
+                "trips_legs": float(t or 0),
+                "total_emissions_g": e,
+                "total_emissions_tonnes": e / 1e6,
+                "total_distance_km": float(d or 0),
+            })
+    return out
+
+
+def _od10_zone_detail_column(cur, detail: str, *, zone_by: str) -> str | None:
+    mode = (zone_by or "rules").strip().lower()
+    if mode == "dest":
+        for col in ("dest_geo_id", "route_dest_geo_id", "dest_zone_geo_id"):
+            if _column_exists(cur, detail, col):
+                return col
+        return None
+    for col in ("emission_zone_geo_id", "route_attributed_geo_id", "route_attributed_zone_geo_id"):
+        if _column_exists(cur, detail, col):
+            return col
+    return None
+
+
+def _od10_zone_match_sql(alias: str, zcol: str) -> str:
+    return f"split_part(btrim({alias}.{zcol}::text), '.', 1) = %s"
+
+
+def _od10_detail_travel_reason_bucket_sql(cur, detail: str, alias: str = "d") -> str | None:
+    """Best available travel-reason bucket expression on a leg-level detail table."""
+    has_purpose = _column_exists(cur, detail, "purpose")
+    has_assign = _column_exists(cur, detail, "route_emission_assignment")
+    if has_purpose or has_assign:
+        return _dashboard_server._routes_travel_reason_bucket_sql(alias, has_purpose=has_purpose)
+    if has_purpose:
+        from meeting_emissions_attribution import motif_travel_reason_sql
+
+        return motif_travel_reason_sql(purpose_expr=f"{alias}.purpose")
+    return None
+
+
+def _od10_zone_by_category_is_usable(categories: list[dict]) -> bool:
+    """False when breakdown is empty or collapsed to a single catch-all bucket."""
+    if not categories:
+        return False
+    if len(categories) == 1:
+        cat = str(categories[0].get("category") or "").strip().lower()
+        if cat in ("other", "unassigned", ""):
+            return False
+    return True
+
+
+def _od10_category_rows_from_query(cur, rows) -> list[dict]:
+    out: list[dict] = []
+    for bucket, emis, dist_km, trips in rows:
+        cat = _dashboard_server._route_bucket_category(bucket)
+        em = float(emis or 0)
+        out.append({
+            "category": cat,
+            "trips": float(trips or 0),
+            "trips_legs": float(trips or 0),
+            "total_emissions_g": em,
+            "total_emissions_tonnes": em / 1e6,
+            "total_distance_km": float(dist_km or 0),
+        })
+    return out
+
+
+def _od10_scale_categories_for_zone(
+    categories: list[dict], zone_stats: dict | None
+) -> list[dict]:
+    """Approximate zone mix from island totals when leg-level breakdown is unavailable."""
+    if not categories or not zone_stats:
+        return []
+    z_emis = float(zone_stats.get("total_emissions_g") or 0)
+    z_trips = float(zone_stats.get("trips") or 0)
+    z_km = float(zone_stats.get("total_distance_km") or 0)
+    island_emis = sum(float(c.get("total_emissions_g") or 0) for c in categories)
+    island_trips = sum(float(c.get("trips") or 0) for c in categories)
+    island_km = sum(float(c.get("total_distance_km") or 0) for c in categories)
+    if island_emis <= 0 or z_emis <= 0:
+        return []
+    emis_ratio = z_emis / island_emis
+    trips_ratio = (z_trips / island_trips) if island_trips > 0 else emis_ratio
+    km_ratio = (z_km / island_km) if island_km > 0 else emis_ratio
+    out: list[dict] = []
+    for c in categories:
+        out.append({
+            "category": c.get("category"),
+            "trips": float(c.get("trips") or 0) * trips_ratio,
+            "trips_legs": float(c.get("trips") or 0) * trips_ratio,
+            "total_emissions_g": float(c.get("total_emissions_g") or 0) * emis_ratio,
+            "total_emissions_tonnes": float(c.get("total_emissions_g") or 0) * emis_ratio / 1e6,
+            "total_distance_km": float(c.get("total_distance_km") or 0) * km_ratio,
+        })
+    return out
+
+
+def _od10_zone_by_category_from_detail(cur, geo_id: str, *, zone_by: str) -> list[dict]:
+    """Travel-reason chart rows for one zone from trips_route_emissions (or legacy detail)."""
+    detail = _od10_detail_table(cur)
+    if not detail:
+        return []
+    gid = str(geo_id or "").strip()
+    if not gid:
+        return []
+    mode = "dest" if (zone_by or "rules").strip().lower() == "dest" else "rules"
+    zcol = _od10_zone_detail_column(cur, detail, zone_by=mode)
+    if not zcol:
+        return []
+    emis_c = _od10_detail_emissions_col(cur, detail)
+    bucket_sql = _od10_detail_travel_reason_bucket_sql(cur, detail, "d")
+    if not bucket_sql:
+        return []
+    use_w = _od10_metrics_weighted() and _column_exists(cur, detail, "d_fexp")
+    if use_w and _column_exists(cur, detail, "expanded_emissions_g"):
+        emis_expr = f"COALESCE(d.expanded_emissions_g, d.{emis_c})"
+        trips_expr = "COALESCE(d.d_fexp, 1)::double precision"
+        dist_expr = "COALESCE(d.distance_m, 0)::double precision * COALESCE(d.d_fexp, 1)"
+    else:
+        emis_expr = f"COALESCE(d.{emis_c}, 0)::double precision"
+        trips_expr = "1::double precision"
+        dist_expr = f"COALESCE(d.distance_m, 0)::double precision"
+    zone_match = _od10_zone_match_sql("d", zcol)
+    cur.execute(
+        f"""
+        SELECT {bucket_sql} AS bucket,
+               SUM({emis_expr})::double precision,
+               SUM({dist_expr})::double precision / 1000.0,
+               SUM({trips_expr})::double precision
+        FROM {SCHEMA}.{detail} d
+        WHERE {zone_match}
+          AND {emis_expr} > 0
+        GROUP BY 1
+        ORDER BY 2 DESC NULLS LAST
+        """,
+        (gid,),
+    )
+    return _od10_category_rows_from_query(cur, cur.fetchall())
+
+
+def _od10_zone_by_category_from_routes(cur, geo_id: str, *, zone_by: str) -> list[dict]:
+    """Travel-reason chart rows for one zone from trip_routes table."""
+    routes_t = _resolve_od10_routes_table(cur)
+    if not routes_t:
+        return []
+    gid = str(geo_id or "").strip()
+    if not gid:
+        return []
+    mode = "dest" if (zone_by or "rules").strip().lower() == "dest" else "rules"
+    if mode == "dest":
+        if not _column_exists(cur, routes_t, "dest_geo_id"):
+            return []
+        zcol = "dest_geo_id"
+    else:
+        zcol = None
+        for col in ("route_attributed_geo_id", "emission_zone_geo_id", "route_attributed_zone_geo_id"):
+            if _column_exists(cur, routes_t, col):
+                zcol = col
+                break
+        if not zcol:
+            return []
+    emis_c = "route_emissions_g" if _column_exists(cur, routes_t, "route_emissions_g") else None
+    if not emis_c:
+        return []
+    has_purpose = _column_exists(cur, routes_t, "purpose")
+    if has_purpose or _column_exists(cur, routes_t, "route_emission_assignment"):
+        bucket_sql = _dashboard_server._routes_travel_reason_bucket_sql(
+            "r", has_purpose=has_purpose
+        )
+    else:
+        bucket_sql = "'other'"
+    zone_match = _od10_zone_match_sql("r", zcol)
+    car_modes = _dashboard_server.CAR_MODE_GROUPS
+    cur.execute(
+        f"""
+        SELECT {bucket_sql} AS bucket,
+               SUM(r.{emis_c})::double precision,
+               SUM(COALESCE(r.distance_m, 0))::double precision / 1000.0,
+               COUNT(*)::double precision
+        FROM {SCHEMA}.{routes_t} r
+        WHERE {zone_match}
+          AND r.{emis_c} IS NOT NULL AND r.{emis_c} > 0
+          AND trim(r.mode_group::text) IN {car_modes}
+        GROUP BY 1
+        ORDER BY 2 DESC NULLS LAST
+        """,
+        (gid,),
+    )
+    return _od10_category_rows_from_query(cur, cur.fetchall())
+
+
+def _od10_zone_by_category(cur, geo_id: str, *, zone_by: str, zone_stats: dict | None) -> list[dict]:
+    by_category = _od10_zone_by_category_from_detail(cur, geo_id, zone_by=zone_by)
+    if not _od10_zone_by_category_is_usable(by_category):
+        by_category = _od10_zone_by_category_from_routes(cur, geo_id, zone_by=zone_by)
+    if not _od10_zone_by_category_is_usable(by_category):
+        by_category = _od10_scale_categories_for_zone(
+            _od10_fetch_global_by_category(cur), zone_stats
+        )
+    return by_category
+
+
+@app.route("/api/od/zone_sidebar")
+@app.route("/api/od/zone_bootstrap")
+@_od10_api_errors
+def api_od10_zone_bootstrap():
+    geo_id = (request.args.get("geo_id") or request.args.get("dest_geo_id") or "").strip()
+    if not geo_id:
+        return jsonify({"error": "geo_id is required"}), 400
+    zone_by = (request.args.get("zone_by") or request.args.get("attribution") or "rules").strip().lower()
+    if zone_by not in ("rules", "dest"):
+        zone_by = "rules"
+    conn = get_conn()
+    try:
+        cur = conn.cursor()
+        stats = _od10_single_zone_stats(cur, geo_id, zone_by=zone_by)
+        by_category = _od10_zone_by_category(cur, geo_id, zone_by=zone_by, zone_stats=stats)
+        zone_codes, zone_names = _zone_code_maps_for_geom(cur)
+        label = zone_codes.get(geo_id) or zone_names.get(geo_id) or geo_id
+        if label and label != geo_id and zone_names.get(geo_id):
+            label = f"{zone_names.get(geo_id)} – {zone_codes.get(geo_id, geo_id)}"
+        elif zone_names.get(geo_id) and zone_codes.get(geo_id):
+            label = f"{zone_names.get(geo_id)} – {zone_codes.get(geo_id)}"
+        return jsonify({
+            "geo_id": geo_id,
+            "zone_by": zone_by,
+            "zone_label": label,
+            "stats": stats,
+            "by_category": by_category,
+            "source": "od",
+        })
+    finally:
+        conn.close()
+
+
+def _od10_patch_incoming_flow_anchors(cur, payload: dict) -> None:
+    """Replace stale precomputed orig/dest lat-lon with live anchors from zones_geom + trip routes."""
+    routes_t = _resolve_od10_routes_table(cur)
+    if not routes_t:
+        return
+    geo_ids: set[str] = set()
+    dest_id = str(payload.get("dest_geo_id") or "").strip()
+    if dest_id:
+        geo_ids.add(dest_id)
+    for flow in payload.get("flows") or []:
+        oid = str(flow.get("orig_geo_id") or "").strip()
+        if oid:
+            geo_ids.add(oid)
+    if not geo_ids:
+        return
+    anchors = fetch_zone_flow_anchors(cur, routes_t, geo_ids)
+    patch_flow_payload_anchors(payload, anchors)
+
+
+def _od10_patch_flows_all_anchors(cur, zones: dict[str, dict]) -> None:
+    routes_t = _resolve_od10_routes_table(cur)
+    if not routes_t or not zones:
+        return
+    geo_ids: set[str] = set()
+    for z in zones.values():
+        did = str(z.get("dest_geo_id") or "").strip()
+        if did:
+            geo_ids.add(did)
+        for flow in z.get("flows") or []:
+            oid = str(flow.get("orig_geo_id") or "").strip()
+            if oid:
+                geo_ids.add(oid)
+    if not geo_ids:
+        return
+    anchors = fetch_zone_flow_anchors(cur, routes_t, geo_ids)
+    for z in zones.values():
+        patch_flow_payload_anchors(z, anchors)
 
 
 def _od10_incoming_payload_from_rows(
@@ -1474,6 +1930,7 @@ def _od10_incoming_payload_from_rows(
         "flows": flows,
         "limit": limit if limit is not None else "all",
         "table": flows_t,
+        "intra_zone": None,
     }
 
 
@@ -2316,17 +2773,25 @@ def api_od10_zone_incoming_flow():
         flows_t = _od10_unified_flows_table(cur)
         if flows_t:
             trips_c, emis_c, dist_c = _od10_flow_metric_cols(zone_by)
+            flow_filter = _od10_flows_nontrivial_sql(trips_c, emis_c)
+            interzonal = _od10_interzonal_flow_filter_sql("f")
             params: list = [dest_id]
             limit_sql = ""
             if limit is not None:
                 limit_sql = " LIMIT %s"
                 params.append(limit)
+            zg_orig = _zones_geom_join(cur, "f.orig_geo_id", "zg_o")
+            zg_dest = _zones_geom_join(cur, "f.dest_geo_id", "zg_d")
             cur.execute(
                 f"""
-                SELECT orig_geo_id, {trips_c}, {emis_c}, {dist_c}, orig_lat, orig_lon
-                FROM {SCHEMA}.{flows_t}
-                WHERE dest_geo_id = %s
-                ORDER BY {emis_c} DESC NULLS LAST, {trips_c} DESC, orig_geo_id
+                SELECT f.orig_geo_id, {trips_c}, {emis_c}, {dist_c}, f.orig_lat, f.orig_lon
+                FROM {SCHEMA}.{flows_t} f
+                {zg_orig}
+                {zg_dest}
+                WHERE f.dest_geo_id = %s
+                {interzonal}
+                {flow_filter}
+                ORDER BY {emis_c} DESC NULLS LAST, {trips_c} DESC, f.orig_geo_id
                 {limit_sql}
                 """,
                 tuple(params),
@@ -2335,8 +2800,12 @@ def api_od10_zone_incoming_flow():
             cur.execute(
                 f"""
                 SELECT SUM({trips_c}), SUM({emis_c}), SUM({dist_c}), COUNT(*)
-                FROM {SCHEMA}.{flows_t}
-                WHERE dest_geo_id = %s
+                FROM {SCHEMA}.{flows_t} f
+                {zg_orig}
+                {zg_dest}
+                WHERE f.dest_geo_id = %s
+                {interzonal}
+                {flow_filter}
                 """,
                 (dest_id,),
             )
@@ -2354,6 +2823,8 @@ def api_od10_zone_incoming_flow():
                 flows_t=flows_t,
                 zone_by=zone_by,
             )
+            _od10_enrich_incoming_payload(cur, payload, zone_by)
+            _od10_patch_incoming_flow_anchors(cur, payload)
             return jsonify(payload)
 
         top_t, tot_t = _od10_flows_tables(cur, zone_by)
@@ -2362,8 +2833,8 @@ def api_od10_zone_incoming_flow():
                 "error": "missing_table",
                 "zone_by": zone_by,
                 "message": (
-                    f"OD10 incoming-flow table missing (zone_incoming_flows_{OD10_RUN_TAG}). Run: "
-                    "python scripts/preprocess_dashboard_od10_zone_emissions.py --flows-only"
+                    f"OD10 incoming-flow table missing (zone_incoming_flows_{OD10_RUN_TAG}). "
+                    "Restore data/db/od_dashboard_tables.dump into the od_dashboard database."
                 ),
             }), 503
         rank_sql = ""
@@ -2371,12 +2842,16 @@ def api_od10_zone_incoming_flow():
         if limit is not None:
             rank_sql = " AND rank <= %s"
             rank_params = [limit]
+        zg_orig = _zones_geom_join(cur, "f.orig_geo_id", "zg_o")
+        zg_dest = _zones_geom_join(cur, "f.dest_geo_id", "zg_d")
         cur.execute(
             f"""
-            SELECT orig_geo_id, trips, total_emissions_g, total_distance_km, orig_lat, orig_lon
-            FROM {SCHEMA}.{top_t}
-            WHERE dest_geo_id = %s{rank_sql}
-            ORDER BY rank
+            SELECT f.orig_geo_id, f.trips, f.total_emissions_g, f.total_distance_km, f.orig_lat, f.orig_lon
+            FROM {SCHEMA}.{top_t} f
+            {zg_orig}
+            {zg_dest}
+            WHERE f.dest_geo_id = %s{rank_sql}
+            ORDER BY f.rank
             """,
             tuple([dest_id] + rank_params),
         )
@@ -2405,6 +2880,8 @@ def api_od10_zone_incoming_flow():
             flows_t=top_t,
             zone_by=zone_by,
         )
+        _od10_enrich_incoming_payload(cur, payload, zone_by)
+        _od10_patch_incoming_flow_anchors(cur, payload)
         return jsonify(payload)
     finally:
         conn.close()
@@ -2425,10 +2902,12 @@ def api_od10_zone_incoming_flows_all():
         flows_t = _od10_unified_flows_table(cur)
         if flows_t:
             trips_c, emis_c, dist_c = _od10_flow_metric_cols(zone_by)
+            flow_filter = _od10_flows_nontrivial_sql(trips_c, emis_c)
+            interzonal = _od10_interzonal_flow_filter_sql("f")
             anchor_t = _resolve_od10_table(cur, OD10_ANCHOR_CANDIDATES)
             zone_t = _od10_zone_table(cur, zone_by)
             if anchor_t:
-                anchor_select = "a.dest_lat, a.dest_lon"
+                anchor_select = "COALESCE(a.map_lat, a.dest_lat), COALESCE(a.map_lon, a.dest_lon)"
                 anchor_join = f"LEFT JOIN {SCHEMA}.{anchor_t} a ON a.geo_id = r.dest_geo_id"
             else:
                 anchor_select = "NULL::double precision, NULL::double precision"
@@ -2445,27 +2924,41 @@ def api_od10_zone_incoming_flows_all():
             if limit is not None:
                 rank_filter = "WHERE r.rn <= %s"
                 params.append(limit)
+            zg_orig = _zones_geom_join(cur, "f.orig_geo_id", "zg_o")
+            zg_dest = _zones_geom_join(cur, "f.dest_geo_id", "zg_d")
+            zg_orig_r = _zones_geom_join(cur, "f.orig_geo_id", "zg_or")
+            zg_dest_r = _zones_geom_join(cur, "f.dest_geo_id", "zg_dr")
             cur.execute(
                 f"""
                 WITH ranked AS (
-                    SELECT dest_geo_id, orig_geo_id, orig_lat, orig_lon,
+                    SELECT f.dest_geo_id, f.orig_geo_id, f.orig_lat, f.orig_lon,
                            {trips_c} AS trips,
                            {emis_c} AS total_emissions_g,
                            {dist_c} AS total_distance_km,
                            ROW_NUMBER() OVER (
-                               PARTITION BY dest_geo_id
-                               ORDER BY {emis_c} DESC NULLS LAST, {trips_c} DESC, orig_geo_id
+                               PARTITION BY f.dest_geo_id
+                               ORDER BY {emis_c} DESC NULLS LAST, {trips_c} DESC, f.orig_geo_id
                            ) AS rn
-                    FROM {SCHEMA}.{flows_t}
+                    FROM {SCHEMA}.{flows_t} f
+                    {zg_orig}
+                    {zg_dest}
+                    WHERE 1=1
+                    {interzonal}
+                    {flow_filter}
                 ),
                 totals AS (
-                    SELECT dest_geo_id,
+                    SELECT f.dest_geo_id,
                            SUM({trips_c})::double precision AS total_incoming_trips,
                            SUM({emis_c})::double precision AS total_incoming_emissions_g,
                            SUM({dist_c})::double precision AS total_incoming_distance_km,
                            COUNT(*)::bigint AS origin_zone_count
-                    FROM {SCHEMA}.{flows_t}
-                    GROUP BY dest_geo_id
+                    FROM {SCHEMA}.{flows_t} f
+                    {zg_orig_r}
+                    {zg_dest_r}
+                    WHERE 1=1
+                    {interzonal}
+                    {flow_filter}
+                    GROUP BY f.dest_geo_id
                 )
                 SELECT r.dest_geo_id, r.rn, r.orig_geo_id, r.trips,
                        r.total_emissions_g, r.total_distance_km, r.orig_lat, r.orig_lon,
@@ -2518,6 +3011,8 @@ def api_od10_zone_incoming_flows_all():
             for z in zones.values():
                 z["flow_count"] = len(z["flows"])
                 z["flows_shown_trips"] = sum(f["trips"] for f in z["flows"])
+                _od10_enrich_incoming_payload(cur, z, zone_by)
+            _od10_patch_flows_all_anchors(cur, zones)
             return jsonify({
                 "supported": True,
                 "zone_by": zone_by,
@@ -2535,8 +3030,8 @@ def api_od10_zone_incoming_flows_all():
                 "reason": "missing_precompute",
                 "zone_by": zone_by,
                 "message": (
-                    f"Missing zone_incoming_flows_{OD10_RUN_TAG}. Run: "
-                    "python scripts/preprocess_dashboard_od10_zone_emissions.py --flows-only"
+                    f"Missing zone_incoming_flows_{OD10_RUN_TAG}. "
+                    "Restore data/db/od_dashboard_tables.dump into the od_dashboard database."
                 ),
                 "zones": {},
             })
@@ -2547,6 +3042,8 @@ def api_od10_zone_incoming_flows_all():
             else "NULL::double precision"
         )
         rank_sql, rank_params = _od10_flow_rank_filter(limit)
+        zg_orig = _zones_geom_join(cur, "f.orig_geo_id", "zg_o")
+        zg_dest = _zones_geom_join(cur, "f.dest_geo_id", "zg_d")
         cur.execute(
             f"""
             SELECT f.dest_geo_id, f.rank, f.orig_geo_id, f.trips,
@@ -2556,6 +3053,8 @@ def api_od10_zone_incoming_flows_all():
                    z.dest_rules_trips, z.dest_rules_emissions_g
             FROM {SCHEMA}.{top_t} f
             JOIN {SCHEMA}.{tot_t} z ON z.dest_geo_id = f.dest_geo_id
+            {zg_orig}
+            {zg_dest}
             WHERE 1=1{rank_sql}
             ORDER BY f.dest_geo_id, f.rank
             """,
@@ -2597,6 +3096,7 @@ def api_od10_zone_incoming_flows_all():
         for z in zones.values():
             z["flow_count"] = len(z["flows"])
             z["flows_shown_trips"] = sum(f["trips"] for f in z["flows"])
+        _od10_patch_flows_all_anchors(cur, zones)
         return jsonify({
             "supported": True,
             "zone_by": zone_by,

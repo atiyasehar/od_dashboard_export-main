@@ -1,49 +1,8 @@
 """
-PopGen dashboard API: KPIs, category charts, zone map, incoming and aggregate OD flows.
+OD dashboard API: KPIs, category charts, zone maps, buildings, and flows.
 
-Table discovery (cached): building / micro / routes_only families.
-Routes-only uses trip_routes_otp_a* or trip_routes_building* + route_emissions_g; map prefers
-zone_emissions_route_assignment* or zone_emissions_rules* (legacy zone_emissions_meeting*);
-when route_attributed_geo_id exists, /api/zone_map aggregates by that rules-attributed zone.
-(Montreal island filter on /api/zone_map by default: uses tight Data/mtl_boundary_file.geojson for SQL;
-padded buffer is not used for filtering because it overlaps Laval / South Shore. Choropleth polygons
-are clipped to that outline when routes_only + island_only. Map outline API serves the
-unpadded île shoreline (not the ~1200 m padded buffer, which extends into the river).
-/api/zone_map returns {"zones":[...], "geojson": FeatureCollection|null}
-with polygons from popgen_zones_geom when available.
-
-Env: DASHBOARD_EMISSIONS_TABLE, DASHBOARD_TRIPS_TABLE, DASHBOARD_ROUTES_TABLE, DASHBOARD_ZONE_TABLE,
-     DASHBOARD_ZONE_EMISSIONS_ROUTE_TABLE, DASHBOARD_PURPOSE_ENRICHMENT_TABLE,
-     DASHBOARD_FAMILY=routes_only (skip trip_emissions* and use trip_routes_* + route_emissions_g only).
-     DASHBOARD_METRICS=weighted (default) | legs — weighted uses sum(leg_weight) on trips join
-     (PM23-comparable); legs uses COUNT(*) of routed car legs.
-
-Precompute zone totals for fast /api/zone_map (rules + destination tables):
-  python scripts/preprocess_dashboard_zone_emissions.py --run-tag 100pct_ct
-  # -> zone_emissions_rules_<tag>, zone_emissions_dest_<tag>,
-  #    building_emissions_rules_<tag>, building_emissions_dest_<tag>
-
-Routes-only /api/building_map: ``building_by=rules`` (default) or ``building_by=dest``.
-
-Precompute inter-zonal OD pairs for fast /api/zone_incoming_flow and /api/od_flows:
-  python scripts/build_od_flow_summary.py --routes-table trip_routes_building_100pct_ct
-  # -> od_flows_route_assignment_100pct_ct (indexed on dest_geo_id)
-
-/api/flows_bootstrap — rules zone_map + optional incoming flows in one request (flows page).
-
-Routes-only /api/zone_map: ``zone_by=dest`` for destination rollup; default uses rules tables.
-``zone_by=meeting`` is accepted as a legacy alias for rules.
-
-Routes-only /api/building_map: ``building_by=dest`` for destination building rollup;
-default uses rules (``route_attributed_building_id``). Requires precomputed
-``building_emissions_*_<tag>`` tables from preprocess_dashboard_zone_emissions.py.
-
-/api/by_purpose_motif — car legs with emissions, grouped by parallel trip_leg_purpose_enrichment* join on route leg keys.
-
-/api/bootstrap — stats + by_category + by_purpose_motif in one JSON (one DB connection; faster first paint).
-
-Run: python scripts/dashboard_server.py — open http://127.0.0.1:5055/
-  (Default port 5055 avoids pgAdmin 4, which binds 127.0.0.1:5050 and returns 401.)
+Serves precomputed tables in the `od_dashboard` database (see manifest.json).
+Default: http://127.0.0.1:5051/ — set PORT in deploy.env or the environment.
 """
 
 from __future__ import annotations
@@ -105,29 +64,75 @@ def _geo_sp23_csv_path() -> Path:
 
 
 def _zone_code_index() -> dict[str, str]:
-    """PopGen geo_id -> census-tract zone_code (SR key from zones.csv)."""
+    """PopGen geo_id -> zone_code from zones_geom (DB), else zones.csv fallback."""
     global _ZONE_CODE_BY_GEO, _ZONE_GEO_BY_CODE
     if _ZONE_CODE_BY_GEO is None:
-        by_geo: dict[str, str] = {}
-        by_code: dict[str, str] = {}
-        zones_csv = _zones_csv_path()
-        if zones_csv.exists():
-            import csv
+        if not _load_zone_maps_from_db():
+            by_geo: dict[str, str] = {}
+            by_code: dict[str, str] = {}
+            zones_csv = _zones_csv_path()
+            if zones_csv.exists():
+                import csv
 
-            with zones_csv.open(encoding="utf-8", newline="") as f:
-                for row in csv.DictReader(f):
-                    gid = str(row.get("geo_id", "")).strip()
-                    zc = str(row.get("zone_code", "")).strip()
-                    if not gid or not zc:
-                        continue
-                    by_geo[gid] = zc
-                    by_code[zc] = gid
-                    base = zc.split(".", 1)[0]
-                    if base and base not in by_code:
-                        by_code[base] = gid
-        _ZONE_CODE_BY_GEO = by_geo
-        _ZONE_GEO_BY_CODE = by_code
+                with zones_csv.open(encoding="utf-8", newline="") as f:
+                    for row in csv.DictReader(f):
+                        gid = str(row.get("geo_id", "")).strip()
+                        zc = str(row.get("zone_code", "")).strip()
+                        if not gid or not zc:
+                            continue
+                        by_geo[gid] = zc
+                        by_code[zc] = gid
+                        base = zc.split(".", 1)[0]
+                        if base and base not in by_code:
+                            by_code[base] = gid
+            _ZONE_CODE_BY_GEO = by_geo
+            _ZONE_GEO_BY_CODE = by_code
     return _ZONE_CODE_BY_GEO
+
+
+def _load_zone_maps_from_db() -> bool:
+    """Load geo_id↔zone_code and names from zones_geom when zone_code column exists."""
+    global _ZONE_CODE_BY_GEO, _ZONE_GEO_BY_CODE, _ZONE_NAME_BY_GEO
+    by_geo: dict[str, str] = {}
+    by_code: dict[str, str] = {}
+    by_name: dict[str, str] = {}
+    try:
+        conn = psycopg2.connect(**DB_PARAMS)
+        try:
+            cur = conn.cursor()
+            zt = "zones_geom"
+            if not _table_exists(cur, zt) or not _column_exists(cur, zt, "zone_code"):
+                return False
+            name_col = "name" if _column_exists(cur, zt, "name") else "NULL"
+            cur.execute(
+                f"""
+                SELECT geo_id::text, zone_code::text, {name_col}::text
+                FROM {SCHEMA}.{zt}
+                WHERE zone_code IS NOT NULL AND btrim(zone_code::text) <> ''
+                """
+            )
+            for gid, zc, nom in cur.fetchall():
+                g = str(gid).strip()
+                c = str(zc).strip()
+                if not g or not c:
+                    continue
+                by_geo[g] = c
+                by_code[c] = g
+                base = c.split(".", 1)[0]
+                if base and base not in by_code:
+                    by_code[base] = g
+                if nom and str(nom).strip():
+                    by_name[g] = str(nom).strip()
+        finally:
+            conn.close()
+    except Exception:
+        return False
+    if not by_geo:
+        return False
+    _ZONE_CODE_BY_GEO = by_geo
+    _ZONE_GEO_BY_CODE = by_code
+    _ZONE_NAME_BY_GEO = by_name
+    return True
 
 
 def _zone_code_for(geo_id) -> str | None:
@@ -168,21 +173,39 @@ def _zone_names_from_db() -> dict[str, str]:
 
 
 def _zone_name_index() -> dict[str, str]:
-    """PopGen geo_id -> zone label (DB popgen_zones_geom.name, else geo_zone_sp23.csv)."""
+    """PopGen geo_id -> zone label from zones_geom.name (DB), else geo_zone_sp23.csv."""
     global _ZONE_NAME_BY_GEO
-    if _ZONE_NAME_BY_GEO is None:
-        by_geo = _zone_names_from_db()
-        geo_sp23 = _geo_sp23_csv_path()
-        if geo_sp23.exists():
-            import csv
+    if _ZONE_NAME_BY_GEO is not None:
+        return _ZONE_NAME_BY_GEO
 
-            with geo_sp23.open(encoding="utf-8", newline="") as f:
-                for row in csv.DictReader(f):
-                    gid = str(row.get("geo_id", "")).strip()
-                    nom = str(row.get("nomsp", "")).strip()
-                    if gid and nom and gid not in by_geo:
-                        by_geo[gid] = nom
-        _ZONE_NAME_BY_GEO = by_geo
+    _zone_code_index()
+    by_geo = dict(_ZONE_NAME_BY_GEO or {})
+    if not by_geo:
+        by_geo = _zone_names_from_db()
+
+    geo_sp23 = _geo_sp23_csv_path()
+    if not by_geo and geo_sp23.exists():
+        import csv
+
+        allowed: set[str] = set()
+        try:
+            _conn = psycopg2.connect(**DB_PARAMS)
+            try:
+                _cur = _conn.cursor()
+                ensure_zones_geom_compat(_cur)
+                allowed = _geom_geo_id_set(_cur)
+            finally:
+                _conn.close()
+        except Exception:
+            pass
+        with geo_sp23.open(encoding="utf-8", newline="") as f:
+            for row in csv.DictReader(f):
+                gid = str(row.get("geo_id", "")).strip()
+                nom = str(row.get("nomsp", "")).strip()
+                if gid and nom and (not allowed or gid in allowed):
+                    by_geo[gid] = nom
+
+    _ZONE_NAME_BY_GEO = by_geo
     return _ZONE_NAME_BY_GEO
 
 
@@ -686,13 +709,13 @@ def _column_exists(cur, table: str, column: str) -> bool:
 
 
 def _zones_geom_table(cur) -> str | None:
-    """Zone polygon table: ``popgen_zones_geom`` (bundle) or legacy ``zones_geom``."""
+    """Zone polygon table: ``zones_geom`` (canonical) or legacy ``popgen_zones_geom`` view."""
     override = os.environ.get("DASHBOARD_ZONES_GEOM_TABLE", "").strip()
     if override:
         if _table_exists(cur, override) and _column_exists(cur, override, "geom"):
             return override
         return None
-    for name in ("popgen_zones_geom", "zones_geom"):
+    for name in ("zones_geom", "popgen_zones_geom"):
         if (
             _table_exists(cur, name)
             and _column_exists(cur, name, "geom")
@@ -700,6 +723,81 @@ def _zones_geom_table(cur) -> str | None:
         ):
             return name
     return None
+
+
+def _geom_geo_id_set(cur) -> set[str]:
+    """PopGen geo_ids present in zones_geom (CMM map source of truth after DB filter)."""
+    zt = _zones_geom_table(cur)
+    if not zt:
+        return set()
+    cur.execute(f"SELECT geo_id::text FROM {SCHEMA}.{zt}")
+    return {str(row[0]).strip() for row in cur.fetchall() if row[0] is not None}
+
+
+def _zones_geom_row_count(cur) -> int:
+    zt = _zones_geom_table(cur)
+    if not zt:
+        return 0
+    cur.execute(f"SELECT COUNT(*) FROM {SCHEMA}.{zt}")
+    return int(cur.fetchone()[0])
+
+
+def _zones_geom_geo_id_expr(geo_id_expr: str) -> str:
+    return f"split_part(trim(({geo_id_expr})::text), '.', 1)"
+
+
+def _zones_geom_join(cur, geo_id_expr: str, alias: str) -> str:
+    """INNER JOIN zones_geom — only zones that exist in the geometry table."""
+    zt = _zones_geom_table(cur)
+    if not zt:
+        return ""
+    gid = _zones_geom_geo_id_expr(geo_id_expr)
+    return f"JOIN {SCHEMA}.{zt} {alias} ON {alias}.geo_id::text = {gid}"
+
+
+def _zone_code_maps_for_geom(cur) -> tuple[dict[str, str], dict[str, str]]:
+    """zone_codes (geo_id↔zone_code) and zone_names from zones_geom rows."""
+    zt = _zones_geom_table(cur)
+    if zt and _column_exists(cur, zt, "zone_code"):
+        codes: dict[str, str] = {}
+        names: dict[str, str] = {}
+        name_col = "name" if _column_exists(cur, zt, "name") else "NULL"
+        cur.execute(
+            f"""
+            SELECT geo_id::text, zone_code::text, {name_col}::text
+            FROM {SCHEMA}.{zt}
+            WHERE zone_code IS NOT NULL AND btrim(zone_code::text) <> ''
+            """
+        )
+        for gid, zc, nom in cur.fetchall():
+            g = str(gid).strip()
+            c = str(zc).strip()
+            if not g or not c:
+                continue
+            codes[g] = c
+            codes[c] = g
+            base = c.split(".", 1)[0]
+            if base and base not in codes:
+                codes[base] = g
+            if nom and str(nom).strip():
+                names[g] = str(nom).strip()
+        if codes:
+            return codes, names
+
+    allowed = _geom_geo_id_set(cur)
+    if not allowed:
+        return _zone_code_index(), _zone_name_index()
+
+    by_geo = _zone_code_index()
+    codes = {gid: zc for gid, zc in by_geo.items() if gid in allowed}
+    global _ZONE_GEO_BY_CODE
+    if _ZONE_GEO_BY_CODE:
+        for zc, gid in _ZONE_GEO_BY_CODE.items():
+            if gid in allowed:
+                codes[zc] = gid
+
+    names = {gid: nom for gid, nom in _zone_name_index().items() if gid in allowed}
+    return codes, names
 
 
 def ensure_zones_geom_compat(cur) -> str | None:
@@ -3097,7 +3195,7 @@ def _reverse_geocode_address(lat: float | None, lon: float | None) -> str | None
     )
     req = urllib.request.Request(
         url,
-        headers={"User-Agent": "PopGen2023-Dashboard/1.0 (building-info)"},
+        headers={"User-Agent": "od-dashboard/1.0 (building-info)"},
     )
     address: str | None = None
     try:
@@ -4631,13 +4729,13 @@ def _warn_localhost_port_conflict(port: int) -> None:
         return
     print(
         "WARNING: http://127.0.0.1:5050/ is pgAdmin (401 Unauthorized), not this dashboard.\n"
-        "  Stop pgAdmin or run:  $env:PORT='5055'; python scripts/dashboard_server.py",
+        "  Stop pgAdmin or set PORT=5051 in deploy.env and re-run.",
         file=__import__("sys").stderr,
     )
 
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5055))
+    port = int(os.environ.get("PORT", 5051))
     _warn_localhost_port_conflict(port)
     print(f"Dashboard: http://127.0.0.1:{port}/")
     try:

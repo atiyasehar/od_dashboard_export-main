@@ -6,6 +6,9 @@
   var cachedStats = null;
   var cachedByCategory = null;
   var activeView = 'zones';
+  var zoneSidebarReq = 0;
+  var selectedZoneByCategory = null;
+  var selectedZoneLabel = '';
 
   function apiBase() {
     try {
@@ -78,29 +81,40 @@
 
   function totalEmissionsKg(statsOrG) {
     if (statsOrG && typeof statsOrG === 'object') {
-      var g = Number(statsOrG.total_emissions_g);
+      var g = Number(statsOrG.total_emissions_g_weighted != null
+        ? statsOrG.total_emissions_g_weighted
+        : statsOrG.total_emissions_g);
       if (Number.isFinite(g)) return Math.round(g / 1000);
       return null;
     }
     return Math.round((Number(statsOrG) || 0) / 1000);
   }
 
-  function totalEmissionsTonnes(statsOrG) {
-    if (statsOrG && typeof statsOrG === 'object') {
-      var g = Number(statsOrG.total_emissions_g);
-      if (Number.isFinite(g)) return g / 1e6;
-      return 0;
+  function emissionsGramsFromRow(rowOrG) {
+    if (rowOrG && typeof rowOrG === 'object') {
+      var g = Number(rowOrG.total_emissions_g_weighted != null
+        ? rowOrG.total_emissions_g_weighted
+        : rowOrG.total_emissions_g);
+      return Number.isFinite(g) ? g : 0;
     }
-    return (Number(statsOrG) || 0) / 1e6;
+    var n = Number(rowOrG);
+    return Number.isFinite(n) ? n : 0;
   }
 
-  function formatEmissionsTonnes(t) {
-    var n = Number(t);
-    if (!Number.isFinite(n) || n <= 0) return '0 t';
-    if (n >= 1000) return n.toLocaleString(undefined, { maximumFractionDigits: 0 }) + ' t';
-    if (n >= 100) return n.toLocaleString(undefined, { maximumFractionDigits: 1 }) + ' t';
-    if (n >= 10) return n.toFixed(1) + ' t';
-    return n.toFixed(2) + ' t';
+  function emissionsChartValue(rowOrG) {
+    return emissionsGramsFromRow(rowOrG) / 1000;
+  }
+
+  function formatEmissionsChart(v) {
+    var n = Number(v);
+    if (!Number.isFinite(n) || n <= 0) return '0 kg CO₂e';
+    if (n >= 1e6) return (n / 1e6).toFixed(1) + 'M kg CO₂e';
+    if (n >= 1e3) return (n / 1e3).toFixed(1) + 'k kg CO₂e';
+    return Math.round(n).toLocaleString() + ' kg CO₂e';
+  }
+
+  function emissionsDatasetLabel() {
+    return 'kg CO₂e';
   }
 
   function formatTripsChart(n) {
@@ -117,7 +131,7 @@
     var arr = ctx.chart.data.datasets[0].data;
     var total = arr.reduce(function (a, b) { return a + b; }, 0);
     var pct = total ? ((t / total) * 100).toFixed(1) : '0';
-    return label + ': ' + formatEmissionsTonnes(t) + ' (' + pct + '%)';
+    return label + ': ' + formatEmissionsChart(t) + ' (' + pct + '%)';
   }
 
   function avgEmissionsKgPerTrip(avgG) {
@@ -152,12 +166,18 @@
     var el = document.getElementById('kpi-trips');
     var subEl = document.getElementById('kpi-trips-sub');
 
-    if (labelEl) labelEl.textContent = 'Car trips';
+    if (labelEl) labelEl.textContent = stats.kpi_scope === 'zone' ? 'Car trips · zone' : 'Car trips';
     if (el) el.textContent = formatTripsNum(expanded);
     if (subEl) {
-      subEl.textContent = stats.kpi_scope === 'island_eligible'
-        ? 'CMM residents · island-touch'
-        : '';
+      if (stats.zone_label) {
+        subEl.textContent = stats.zone_label;
+      } else if (stats.kpi_scope === 'island_eligible') {
+        subEl.textContent = 'CMM residents · island-touch';
+      } else if (stats.kpi_scope === 'zone') {
+        subEl.textContent = 'Selected zone';
+      } else {
+        subEl.textContent = '';
+      }
     }
 
     el = document.getElementById('kpi-co2');
@@ -166,6 +186,61 @@
     if (el) el.textContent = formatNum(km);
     el = document.getElementById('kpi-avg');
     if (el) el.textContent = avgKg != null ? formatNum(avgKg) : '—';
+  }
+
+  function scaleCategoriesForZone(islandCats, zoneStats) {
+    if (!islandCats || !islandCats.length || !zoneStats) return [];
+    var zEm = Number(zoneStats.total_emissions_g) || 0;
+    var zTrips = Number(zoneStats.trips) || 0;
+    var zKm = Number(zoneStats.total_distance_km) || 0;
+    var islandEm = islandCats.reduce(function (a, c) { return a + (Number(c.total_emissions_g) || 0); }, 0);
+    var islandTrips = islandCats.reduce(function (a, c) { return a + (Number(c.trips) || 0); }, 0);
+    var islandKm = islandCats.reduce(function (a, c) { return a + (Number(c.total_distance_km) || 0); }, 0);
+    if (islandEm <= 0 || zEm <= 0) return [];
+    var emisRatio = zEm / islandEm;
+    var tripsRatio = islandTrips > 0 ? (zTrips / islandTrips) : emisRatio;
+    var kmRatio = islandKm > 0 ? (zKm / islandKm) : emisRatio;
+    return islandCats.map(function (c) {
+      return {
+        category: c.category,
+        trips: (Number(c.trips) || 0) * tripsRatio,
+        total_emissions_g: (Number(c.total_emissions_g) || 0) * emisRatio,
+        total_distance_km: (Number(c.total_distance_km) || 0) * kmRatio,
+      };
+    });
+  }
+
+  function updateChartTitles(zoneLabel) {
+    var suffix = zoneLabel ? (' · ' + zoneLabel) : '';
+    var titles = [
+      { sel: '#chart-emissions', base: 'Emissions by travel reason (kg CO₂e)' },
+      { sel: '#chart-donut', base: 'Emissions share' },
+      { sel: '#chart-trips', base: 'Trips by travel reason' },
+      { sel: '#chart-distance', base: 'Distance by travel reason (km)' },
+    ];
+    titles.forEach(function (item) {
+      var canvas = document.querySelector(item.sel);
+      var card = canvas && canvas.closest ? canvas.closest('.card') : null;
+      var h = card && card.querySelector ? card.querySelector('h3') : null;
+      if (h) h.textContent = item.base + suffix;
+    });
+  }
+
+  function tripCountFromCategory(d) {
+    if (d.trips_weighted != null && Number(d.trips_weighted) > 0) return d.trips_weighted;
+    return d.trips;
+  }
+
+  function applySidebarCharts(byCategory, zoneStats, zoneLabel) {
+    var cats = (byCategory && byCategory.length)
+      ? byCategory
+      : scaleCategoriesForZone(cachedByCategory, zoneStats);
+    selectedZoneLabel = zoneLabel || '';
+    if (cats && cats.length) {
+      selectedZoneByCategory = cats;
+      initCharts(cats);
+      updateChartTitles(zoneLabel || '');
+    }
   }
 
   function setActiveView(page) {
@@ -178,7 +253,7 @@
 
   function barChartOptions(compact, total, horizontal, chartKind) {
     var kind = chartKind || 'emissions';
-    var valueFormatter = kind === 'trips' ? formatTripsChart : formatEmissionsTonnes;
+    var valueFormatter = kind === 'trips' ? formatTripsChart : formatEmissionsChart;
     var valueAxis = {
       beginAtZero: true,
       ticks: {
@@ -208,7 +283,7 @@
               var label = ctx.label || '';
               var raw = horizontal ? ctx.parsed.x : ctx.parsed.y;
               if (kind === 'trips') return label + ': ' + formatTripsChart(raw) + ' trips';
-              return label + ': ' + formatEmissionsTonnes(raw);
+              return label + ': ' + formatEmissionsChart(raw);
             },
           },
         },
@@ -241,8 +316,8 @@
     });
     var labelLen = compact ? 11 : 18;
     var labels = sorted.map(function (d) { return shortChartLabel(d.category, labelLen); });
-    var emissionsData = sorted.map(function (d) { return totalEmissionsTonnes(d.total_emissions_g); });
-    var tripsData = sorted.map(function (d) { return d.trips; });
+    var emissionsData = sorted.map(function (d) { return emissionsChartValue(d); });
+    var tripsData = sorted.map(function (d) { return tripCountFromCategory(d); });
     var totalEmissions = emissionsData.reduce(function (a, b) { return a + b; }, 0);
     var totalTrips = tripsData.reduce(function (a, b) { return a + b; }, 0);
     var bgColors = CATEGORY_COLORS.slice(0, labels.length);
@@ -257,7 +332,7 @@
       if (chartEmissions) chartEmissions.destroy();
       chartEmissions = new Chart(ce, {
         type: 'bar',
-        data: { labels: labels, datasets: [{ label: 't CO₂', data: emissionsData, backgroundColor: bgColors, borderRadius: 6 }] },
+        data: { labels: labels, datasets: [{ label: emissionsDatasetLabel(), data: emissionsData, backgroundColor: bgColors, borderRadius: 6 }] },
         options: barChartOptions(compact, totalEmissions, horizontal, 'emissions'),
         plugins: [ChartDataLabels],
       });
@@ -322,25 +397,91 @@
     });
   }
 
+  function applyInstantZoneSidebar(stats, zoneLabel, geoId) {
+    if (!stats) return;
+    var statsNow = Object.assign({}, stats, {
+      zone_label: zoneLabel || geoId || stats.geo_id || '',
+      kpi_scope: 'zone',
+    });
+    applyKpiStats(statsNow, activeView);
+    applySidebarCharts(null, statsNow, statsNow.zone_label);
+  }
+
   function loadHostSidebar() {
-    return fetchJson('/api/od/bootstrap', 120000).then(function (boot) {
+    return fetchJson('/api/od/home', 120000).then(function (boot) {
       var stats = (boot && boot.stats_island_eligible)
         || (boot && (boot.stats_rules || boot.stats))
         || null;
       cachedStats = stats;
+      cachedByCategory = (boot && boot.by_category) || null;
       if (stats) applyKpiStats(stats, activeView);
-      if (boot && boot.by_category) {
-        cachedByCategory = boot.by_category;
-        initCharts(cachedByCategory);
-      }
+      if (cachedByCategory) initCharts(cachedByCategory);
     }).catch(function (err) {
       console.error('od host sidebar:', err);
     });
   }
 
-  function resizeCharts() {
+  function clearZoneSidebar() {
+    zoneSidebarReq += 1;
+    selectedZoneByCategory = null;
+    selectedZoneLabel = '';
+    if (cachedStats) {
+      var stats = Object.assign({}, cachedStats);
+      delete stats.zone_label;
+      applyKpiStats(stats, activeView);
+    }
     if (cachedByCategory) {
       initCharts(cachedByCategory);
+      updateChartTitles('');
+    }
+  }
+
+  function loadZoneSidebar(geoId, zoneBy, instant) {
+    var gid = String(geoId || '').trim();
+    if (!gid) {
+      clearZoneSidebar();
+      return Promise.resolve();
+    }
+    var seq = ++zoneSidebarReq;
+    var instantStats = instant && instant.stats;
+    var instantLabel = (instant && instant.zone_label) || '';
+    if (instantStats) {
+      applyInstantZoneSidebar(instantStats, instantLabel, gid);
+    } else {
+      setKpiLoading(true);
+    }
+    var q = new URLSearchParams({
+      geo_id: gid,
+      zone_by: zoneBy === 'dest' ? 'dest' : 'rules',
+    });
+    return fetchJson('/api/od/zone_sidebar?' + q.toString(), 60000).then(function (data) {
+      if (seq !== zoneSidebarReq) return;
+      var stats = null;
+      if (data && data.stats) {
+        stats = Object.assign({}, data.stats, {
+          zone_label: data.zone_label || data.geo_id || gid,
+          kpi_scope: 'zone',
+        });
+        applyKpiStats(stats, activeView);
+      }
+      applySidebarCharts(
+        data && data.by_category,
+        stats || instantStats || (data && data.stats),
+        (data && data.zone_label) || instantLabel || gid
+      );
+    }).catch(function (err) {
+      if (seq !== zoneSidebarReq) return;
+      console.warn('zone sidebar:', err);
+      if (!instantStats && cachedStats) applyKpiStats(cachedStats, activeView);
+    }).finally(function () {
+      if (seq === zoneSidebarReq) setKpiLoading(false);
+    });
+  }
+
+  function resizeCharts() {
+    var cats = selectedZoneByCategory || cachedByCategory;
+    if (cats) {
+      initCharts(cats);
       return;
     }
     [chartEmissions, chartTrips, chartDonut].forEach(function (c) {
@@ -350,6 +491,8 @@
 
   window.DashHostOd = {
     loadHostSidebar: loadHostSidebar,
+    loadZoneSidebar: loadZoneSidebar,
+    clearZoneSidebar: clearZoneSidebar,
     applyKpiStats: applyKpiStats,
     setKpiLoading: setKpiLoading,
     setActiveView: setActiveView,

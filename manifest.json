@@ -4,37 +4,25 @@
   "schema": "public",
   "dbname": "od_dashboard",
   "tables": [
+    "public.zones_geom",
+    "public.zone_emissions_od10",
+    "public.zone_emissions_categories_od10",
+    "public.zone_incoming_flows_od10",
+    "public.zone_flow_anchors_od10",
     "public.building_emissions_od10",
     "public.buildings_footprint",
-    "public.geo_id_zone_map",
-    "public.zones_geom",
-    "public.trips_route_emissions",
-    "public.zone_emissions_categories_od10",
-    "public.zone_emissions_od10",
-    "public.zone_flow_anchors_od10",
-    "public.zone_incoming_flows_od10",
-    "public.spatial_ref_sys"
+    "public.trips_route_emissions"
   ],
-  "views": [
-    "public.popgen_zones_geom",
-    "public.v_geo_id_ct",
-    "public.v_buildings_ct",
-    "public.v_building_emissions_ct",
-    "public.v_ct_zone_emissions_od10",
-    "public.v_ct_trip_reconciliation",
-    "public.v_ct_zones_geom"
-  ],
+  "views": [],
   "row_counts": {
-    "building_emissions_od10": 924757,
-    "buildings_footprint": 927535,
-    "geo_id_zone_map": 1074,
-    "zones_geom": 1074,
-    "trips_route_emissions": 116929,
-    "zone_emissions_categories_od10": 10,
+    "zones_geom": 936,
     "zone_emissions_od10": 938,
-    "zone_flow_anchors_od10": 1074,
-    "zone_incoming_flows_od10": 99436,
-    "spatial_ref_sys": 8500
+    "zone_emissions_categories_od10": 10,
+    "zone_incoming_flows_od10": 87151,
+    "zone_flow_anchors_od10": 936,
+    "building_emissions_od10": 924757,
+    "buildings_footprint": 927307,
+    "trips_route_emissions": 116929
   },
   "building_emissions_note": "Zone-purpose capacity allocation; trips_weighted_rules ~2.3M, trips_weighted_dest ~2.4M expanded PM23 trips",
   "zone_table_mode": "unified",
@@ -42,11 +30,8 @@
     "mtl_boundary_file.geojson",
     "mtl_boundary_file_padded.geojson"
   ],
-  "zone_input_files": [
-    "zones.csv",
-    "geo_zone_sp23.csv"
-  ],
   "dump_file": "data/db/od_dashboard_tables.dump",
-  "created_at": "2026-06-30T20:21:05.989995+00:00",
-  "dump_size_mb_approx": 239.1
+  "created_at": "2026-07-15T16:26:02.705882+00:00",
+  "dump_size_mb_approx": 242.0,
+  "zone_table": "public.zones_geom"
 }

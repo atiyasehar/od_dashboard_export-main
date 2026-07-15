@@ -28,7 +28,7 @@
   var ready = {};
   var dataReady = {};
   var activePage = 'od-zones';
-  var FRAME_CACHE_BUST = '20260629-building-legend-kg';
+  var FRAME_CACHE_BUST = '20260707-host-kpi-sync';
 
   function parentAttributionParam() {
     try {
@@ -333,6 +333,24 @@
     } catch (_) { /* empty */ }
   }
 
+  function syncFlowsDestUrlOnly(detail) {
+    var dest = detail && detail.dest_geo_id != null ? String(detail.dest_geo_id || '') : '';
+    var zb = detail && detail.zone_by === 'dest' ? 'dest' : 'rules';
+    syncAttributionFromMessage(zb);
+    try {
+      var params = new URLSearchParams(window.location.search);
+      params.set('view', 'flows');
+      if (dest) params.set('dest_geo_id', dest);
+      else params.delete('dest_geo_id');
+      if (zb === 'dest') params.set('attribution', 'dest');
+      else params.delete('attribution');
+      var url = spaUrl(params);
+      if (window.history && window.history.replaceState) {
+        window.history.replaceState({ dashPage: 'od-flows' }, '', url);
+      }
+    } catch (_) { /* empty */ }
+  }
+
   function bindMessages() {
     window.addEventListener('message', function (e) {
       if (!e.data || typeof e.data !== 'object') return;
@@ -345,6 +363,21 @@
       }
       if (e.data.type === 'dash-attribution') {
         syncAttributionFromMessage(e.data.attribution);
+      }
+      if (e.data.type === 'dash-flows-dest') {
+        syncFlowsDestUrlOnly(e.data);
+      }
+      if (e.data.type === 'dash-zone-select') {
+        if (e.data.clear || !e.data.geo_id) {
+          if (window.DashHostOd && typeof DashHostOd.clearZoneSidebar === 'function') {
+            DashHostOd.clearZoneSidebar();
+          }
+        } else if (window.DashHostOd && typeof DashHostOd.loadZoneSidebar === 'function') {
+          DashHostOd.loadZoneSidebar(e.data.geo_id, e.data.zone_by, {
+            stats: e.data.stats,
+            zone_label: e.data.zone_label,
+          });
+        }
       }
       if (e.data.type === 'dash-open-flows') {
         openFlowsWithDest(e.data);

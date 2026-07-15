@@ -1,14 +1,13 @@
 {
   "dump_file": "data/db/od_dashboard_tables.dump",
-  "dump_distribution": "OneDrive (not included in Git repository); also PopGen2023/Data/db/od_dashboard_tables.zip",
-  "dump_download_url": "https://liveconcordia-my.sharepoint.com/:u:/g/personal/atiya_atiya_concordia_ca/IQAJ5sS0VwhdQ5SYtKaw-8g3AS9G0yONvl3tR7gfnXT7eIQ?e=H5WVeD",
-  "dump_size_mb_approx": 239,
+  "dump_distribution": "Not included in Git; obtain separately and place at data/db/od_dashboard_tables.dump",
+  "dump_size_mb_approx": 242.0,
   "dump_filename": "od_dashboard_tables.dump",
   "database_name": "od_dashboard",
   "schema": "public",
   "restore_steps": {
     "0_configure": "Copy deploy.example.env to deploy.env in the project root and set PGHOST, PGPORT, PGUSER, PGPASSWORD",
-    "1_create_database": "pgAdmin → Create Database → name: od_dashboard",
+    "1_create_database": "pgAdmin \u2192 Create Database \u2192 name: od_dashboard",
     "2_prepare_schema_sql": [
       "DROP SCHEMA IF EXISTS public CASCADE;",
       "CREATE SCHEMA public;",
@@ -20,8 +19,15 @@
       "format": "Custom or tar",
       "filename": "data/db/od_dashboard_tables.dump",
       "data_options": {
-        "sections": { "pre_data": true, "post_data": true, "data": true },
-        "type_of_objects": { "only_data": false, "only_schema": false },
+        "sections": {
+          "pre_data": true,
+          "post_data": true,
+          "data": true
+        },
+        "type_of_objects": {
+          "only_data": false,
+          "only_schema": false
+        },
         "do_not_save": {
           "owner": true,
           "privileges": true,
@@ -37,26 +43,17 @@
     "4_verify": "SELECT table_schema, table_name FROM information_schema.tables WHERE table_schema = 'public' ORDER BY table_name;"
   },
   "tables": [
+    "zones_geom",
+    "zone_emissions_od10",
+    "zone_emissions_categories_od10",
+    "zone_incoming_flows_od10",
+    "zone_flow_anchors_od10",
     "building_emissions_od10",
     "buildings_footprint",
-    "geo_id_zone_map",
-    "zones_geom",
-    "trips_route_emissions",
-    "zone_emissions_categories_od10",
-    "zone_emissions_od10",
-    "zone_flow_anchors_od10",
-    "zone_incoming_flows_od10",
-    "spatial_ref_sys"
+    "trips_route_emissions"
   ],
-  "views": [
-    "popgen_zones_geom",
-    "v_geo_id_ct",
-    "v_buildings_ct",
-    "v_building_emissions_ct",
-    "v_ct_zone_emissions_od10",
-    "v_ct_trip_reconciliation",
-    "v_ct_zones_geom"
-  ],
+  "views": [],
   "building_emissions_rows_approx": 924757,
-  "building_emissions_note": "Capacity-allocated expanded trips (trips_weighted_rules/dest); UI shows weighted totals, not leg counts"
+  "building_emissions_note": "Capacity-allocated expanded trips (trips_weighted_rules/dest); UI shows weighted totals, not leg counts",
+  "zone_table": "zones_geom"
 }

@@ -558,7 +558,7 @@
       return String(geoId != null ? geoId : '');
     }
 
-    /** Same host as this page when served by Flask; override with ?api=http://127.0.0.1:5055 */
+    /** Same host as this page when served by Flask; override with ?api=http://127.0.0.1:5051 */
     function apiBase() {
       try {
         const u = (new URLSearchParams(window.location.search).get('api') || '').trim();
@@ -593,7 +593,6 @@
       IS_ZONE_PAGE ? s.mapType === 'zone' : (IS_BUILDING_PAGE ? s.mapType === 'building' : true)
     );
     const mapViews = {};
-    let cachedBoundaryGj = null;
     let cmmZonesBoundaryGeojson = null;
     let map = null;
     let flowLayer = null;
@@ -1257,6 +1256,7 @@
       buildingZoneLoadToken++;
       selectedGeoId = zid;
       clearBuildingSelection();
+      notifyParentZoneSelection(zid, activeBuildingBy(), false);
       MAP_SPECS.filter(s => s.mapType === 'building').forEach(spec => {
         ensureMapViewData(spec.key);
         mapViews[spec.key].payload = { buildings: [], truncated: false };
@@ -1284,6 +1284,7 @@
       buildingZoneLoadToken++;
       selectedGeoId = null;
       clearBuildingSelection();
+      notifyParentZoneSelection('', activeBuildingBy(), true);
       MAP_SPECS.filter(s => s.mapType === 'building').forEach(spec => {
         ensureMapViewData(spec.key);
         mapViews[spec.key].payload = { buildings: [], truncated: false };
@@ -1328,7 +1329,7 @@
       } catch (net) {
         const hint = API
           ? ''
-          : '\n\nTip: open the app from the Flask URL (http://127.0.0.1:5055/) or add ?api=http://127.0.0.1:5055 to this page.';
+          : '\n\nTip: open the app from the Flask URL (http://127.0.0.1:5051/) or add ?api=http://127.0.0.1:5051 to this page.';
         throw new Error('Network error calling ' + (url || path) + ': ' + (net && net.message ? net.message : net) + hint);
       }
       const text = await r.text();
@@ -1491,7 +1492,6 @@
     };
     const ZONE_NO_TRIP_FILL = '#475569';
     const ZONE_NO_TRIP_STROKE = '#64748b';
-    const ISLAND_OUTLINE_BUFFER_M = 1000;
 
     function zoneDisplayTrips(props) {
       const p = props || {};
@@ -2372,8 +2372,8 @@
             }
           }
         }
-        if (!selectedGeoId && cachedBoundaryGj) {
-          const bl = L.geoJSON(cachedBoundaryGj).getBounds();
+        if (!selectedGeoId && cmmZonesBoundaryGeojson) {
+          const bl = L.geoJSON(cmmZonesBoundaryGeojson).getBounds();
           if (bl && bl.isValid && bl.isValid()) {
             map.fitBounds(bl.pad(0.05), { maxZoom: 11, animate: false });
           }
@@ -3034,22 +3034,11 @@
 
     function applyBoundaryToView(viewKey) {
       const v = mapViews[viewKey];
-      if (!v || !v.map || !cachedBoundaryGj) return;
+      if (!v || !v.map) return;
       if (v.boundaryLayer) {
         v.map.removeLayer(v.boundaryLayer);
         v.boundaryLayer = null;
       }
-      v.boundaryLayer = L.geoJSON(cachedBoundaryGj, {
-        interactive: false,
-        style: () => ({
-          color: '#14b8a6',
-          weight: 2.5,
-          opacity: 0.92,
-          fill: false,
-          fillOpacity: 0,
-          dashArray: '10 6',
-        }),
-      }).addTo(v.map);
     }
 
     function applyCmmBoundaryToView(viewKey) {
@@ -3091,11 +3080,11 @@
     }
 
     function fitAllMapsToBoundary() {
-      const firstKey = Object.keys(mapViews).find(k => mapViews[k] && mapViews[k].boundaryLayer);
+      const firstKey = Object.keys(mapViews).find(k => mapViews[k] && mapViews[k].zonesBoundaryLayer);
       const v0 = firstKey ? mapViews[firstKey] : null;
-      if (!v0 || !v0.boundaryLayer) return;
+      if (!v0 || !v0.zonesBoundaryLayer) return;
       try {
-        const b = v0.boundaryLayer.getBounds();
+        const b = v0.zonesBoundaryLayer.getBounds();
         if (b && b.isValid && b.isValid()) {
           Object.keys(mapViews).forEach(key => {
             const v = mapViews[key];
@@ -3106,15 +3095,7 @@
     }
 
     async function loadMontrealBoundary() {
-      try {
-        const gj = await fetchJson('/api/montreal_boundary.geojson?buffer_m=' + ISLAND_OUTLINE_BUFFER_M);
-        if (!gj || gj.type !== 'FeatureCollection' || !gj.features || !gj.features.length) return;
-        cachedBoundaryGj = gj;
-        Object.keys(mapViews).forEach(applyBoundaryToView);
-        fitAllMapsToBoundary();
-      } catch (e) {
-        console.warn('Montreal boundary:', e);
-      }
+      /* Island buffer outline intentionally hidden — zone mesh boundaries remain visible. */
     }
 
     function ensureMapView(key) {
@@ -3314,6 +3295,154 @@
       return { legs, expanded, emisLegs, kmLegs, avgLegsG };
     }
 
+    function zoneStatsFromRow(row, geoId) {
+      const r = row || {};
+      const trips = Number(r.trips) || 0;
+      const tripsW = Number(r.trips_weighted != null ? r.trips_weighted : trips) || 0;
+      const emis = Number(r.total_emissions_g) || 0;
+      const emisW = Number(r.total_emissions_g_weighted != null ? r.total_emissions_g_weighted : emis) || 0;
+      const km = Number(r.total_distance_km) || 0;
+      const kmW = Number(r.total_distance_km_weighted != null ? r.total_distance_km_weighted : km) || 0;
+      return {
+        geo_id: String(geoId),
+        trips,
+        trips_weighted: tripsW,
+        total_emissions_g: emis,
+        total_emissions_g_weighted: emisW,
+        total_distance_km: km,
+        total_distance_km_weighted: kmW,
+        avg_emissions_g_per_trip: trips > 0 ? emis / trips : 0,
+        kpi_scope: 'zone',
+      };
+    }
+
+    function findZoneRowForBuilding(geoId, zoneBy) {
+      const zb = zoneBy === 'dest' ? 'dest' : 'rules';
+      const key = zb === 'dest' ? 'bldgDest' : 'bldgRules';
+      const zp = mapViews[key] && mapViews[key].zonePayload;
+      if (!zp) return null;
+      const id = String(geoId);
+      return (zp.zones || []).find(z => String(z.geo_id) === id) || null;
+    }
+
+    function scaleCategoriesForZone(islandCats, zoneStats) {
+      if (!islandCats || !islandCats.length || !zoneStats) return [];
+      const zEm = Number(zoneStats.total_emissions_g) || 0;
+      const zTrips = Number(zoneStats.trips) || 0;
+      const zKm = Number(zoneStats.total_distance_km) || 0;
+      const islandEm = islandCats.reduce((a, c) => a + (Number(c.total_emissions_g) || 0), 0);
+      const islandTrips = islandCats.reduce((a, c) => a + (Number(c.trips) || 0), 0);
+      const islandKm = islandCats.reduce((a, c) => a + (Number(c.total_distance_km) || 0), 0);
+      if (islandEm <= 0 || zEm <= 0) return [];
+      const emisRatio = zEm / islandEm;
+      const tripsRatio = islandTrips > 0 ? (zTrips / islandTrips) : emisRatio;
+      const kmRatio = islandKm > 0 ? (zKm / islandKm) : emisRatio;
+      return islandCats.map(c => ({
+        category: c.category,
+        trips: (Number(c.trips) || 0) * tripsRatio,
+        total_emissions_g: (Number(c.total_emissions_g) || 0) * emisRatio,
+        total_distance_km: (Number(c.total_distance_km) || 0) * kmRatio,
+      }));
+    }
+
+    function updateChartTitles(zoneLabel) {
+      const suffix = zoneLabel ? (' · ' + zoneLabel) : ' · island';
+      const titles = [
+        { sel: '#chart-emissions', base: 'Emissions by category (t CO₂)' },
+        { sel: '#chart-trips', base: 'Trips by category' },
+        { sel: '#chart-donut', base: 'Emissions share' },
+        { sel: '#chart-distance', base: 'Distance by category (km)' },
+      ];
+      titles.forEach(item => {
+        const canvas = document.querySelector(item.sel);
+        const card = canvas && canvas.closest ? canvas.closest('.card') : null;
+        const h = card && card.querySelector ? card.querySelector('h3') : null;
+        if (h) h.textContent = item.base + suffix;
+      });
+    }
+
+    function applySidebarCharts(byCategory, zoneStats, zoneLabel) {
+      const islandCats = (bootCacheBuildings && bootCacheBuildings.by_category) || [];
+      const cats = (byCategory && byCategory.length)
+        ? byCategory
+        : scaleCategoriesForZone(islandCats, zoneStats);
+      if (cats && cats.length) {
+        initCharts(cats);
+        updateChartTitles(zoneLabel || '');
+      }
+    }
+
+    async function refreshBuildingZoneSidebar(geoId, zoneBy) {
+      const gid = String(geoId || '').trim();
+      if (!gid) {
+        const bootStats = (bootCacheBuildings && bootCacheBuildings.stats_island_eligible)
+          || (bootCacheBuildings && bootCacheBuildings.stats_rules)
+          || (bootCacheBuildings && bootCacheBuildings.stats)
+          || null;
+        if (bootStats) {
+          applyKpiStats(bootStats);
+          if (bootCacheBuildings && bootCacheBuildings.by_category) {
+            initCharts(bootCacheBuildings.by_category);
+            updateChartTitles('');
+          }
+        }
+        return;
+      }
+      const zb = zoneBy === 'dest' ? 'dest' : 'rules';
+      const row = findZoneRowForBuilding(gid, zb) || {};
+      const instantStats = Object.assign({}, zoneStatsFromRow(row, gid), {
+        zone_label: zoneCt(gid, row),
+        kpi_scope: 'zone',
+      });
+      applyKpiStats(instantStats);
+      applySidebarCharts(null, instantStats, instantStats.zone_label);
+      try {
+        const data = await fetchJson(
+          '/api/od/zone_sidebar?geo_id=' + encodeURIComponent(gid) + '&zone_by=' + zb
+        );
+        if (data && data.stats) {
+          applyKpiStats(Object.assign({}, data.stats, {
+            zone_label: data.zone_label || zoneCt(gid, row),
+            kpi_scope: 'zone',
+          }));
+        }
+        applySidebarCharts(
+          data && data.by_category,
+          (data && data.stats) || instantStats,
+          (data && data.zone_label) || instantStats.zone_label
+        );
+      } catch (e) {
+        console.warn('zone sidebar:', e);
+      }
+    }
+
+    function notifyParentZoneSelection(geoId, zoneBy, clear) {
+      const gid = String(geoId || '').trim();
+      const zb = zoneBy === 'dest' ? 'dest' : 'rules';
+      if (IS_EMBED && window.parent !== window) {
+        if (clear || !gid) {
+          window.parent.postMessage({
+            type: 'dash-zone-select',
+            clear: true,
+            geo_id: '',
+            zone_by: zb,
+          }, '*');
+          return;
+        }
+        const row = findZoneRowForBuilding(gid, zb) || {};
+        window.parent.postMessage({
+          type: 'dash-zone-select',
+          geo_id: gid,
+          zone_by: zb,
+          clear: false,
+          stats: zoneStatsFromRow(row, gid),
+          zone_label: zoneCt(gid, row),
+        }, '*');
+        return;
+      }
+      refreshBuildingZoneSidebar(gid, zb).catch(err => console.warn('building zone sidebar:', err));
+    }
+
     function applyKpiStats(stats) {
       if (!stats) return;
       const trips = Number(stats.trips_weighted ?? stats.trips) || 0;
@@ -3323,13 +3452,19 @@
       const kg = totalEmissionsKg(emis);
       const avgKg = avgEmissionsKgPerTrip(avgG);
       const labelEl = document.getElementById('kpi-trips-label');
-      if (labelEl) labelEl.textContent = 'Car trips';
+      if (labelEl) {
+        labelEl.textContent = stats.kpi_scope === 'zone' ? 'Car trips · zone' : 'Car trips';
+      }
       document.getElementById('kpi-trips').textContent = formatTripsNum(trips);
       const subEl = document.getElementById('kpi-trips-sub');
       if (subEl) {
-        subEl.textContent = stats.kpi_scope === 'island_eligible'
-          ? 'CMM residents · island-touch'
-          : '';
+        if (stats.zone_label) {
+          subEl.textContent = stats.zone_label;
+        } else if (stats.kpi_scope === 'island_eligible') {
+          subEl.textContent = 'CMM residents · island-touch';
+        } else {
+          subEl.textContent = '';
+        }
       }
       document.getElementById('kpi-co2').textContent = kg != null ? formatNum(kg) : '—';
       document.getElementById('kpi-km').textContent = formatNum(km);
@@ -3416,9 +3551,9 @@
       finishEmbedMapPaint();
       if (!IS_EMBED) setKpiLoading(true);
       const motifLimit = (new URLSearchParams(window.location.search).get('motif_limit') || '24').trim() || '24';
-      const bootUrl = '/api/od/bootstrap';
+      const bootUrl = '/api/od/home';
       const bootPromise = fetchJson(bootUrl).catch(err => {
-        console.error('bootstrap:', err);
+        console.error('home:', err);
         return null;
       });
       const zoneCodesPromise = fetchJson('/api/zone_codes').catch(() => null);
@@ -3477,6 +3612,9 @@
                   refitActiveBuildingMap();
                   updateBuildingPageHint();
                   refreshSelectedBuildingForActiveView();
+                  if (selectedGeoId) {
+                    notifyParentZoneSelection(selectedGeoId, activeBuildingBy(), false);
+                  }
                 });
               });
             },
