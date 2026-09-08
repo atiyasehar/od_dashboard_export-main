@@ -13,11 +13,12 @@
   <link rel="stylesheet" href="assets/loading-overlay.css" />
   <link rel="stylesheet" href="assets/dashboard-nav.css" />
   <link rel="stylesheet" href="assets/dashboard-shell.css?v=10" />
-  <link rel="stylesheet" href="assets/dashboard-embed.css?v=9" />
+  <link rel="stylesheet" href="assets/dashboard-embed.css?v=10" />
   <script src="assets/dashboard-embed.js?v=1"></script>
   <script src="assets/dashboard-zone-ui.js?v=20"></script>
   <script src="assets/loading-overlay.js?v=11"></script>
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="assets/dashboard-map-basemap.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/leaflet.heat@0.2.0/dist/leaflet-heat.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.2.0"></script>
@@ -54,10 +55,9 @@
       from { opacity: 0; transform: translateY(12px); }
       to { opacity: 1; transform: translateY(0); }
     }
-    @keyframes pulseRing {
-      0% { box-shadow: 0 0 0 0 rgba(94, 234, 212, 0.45); }
-      70% { box-shadow: 0 0 0 14px rgba(94, 234, 212, 0); }
-      100% { box-shadow: 0 0 0 0 rgba(94, 234, 212, 0); }
+    @keyframes zoneBoundaryPulse {
+      0%, 100% { filter: drop-shadow(0 0 2px #ffffff) drop-shadow(0 0 6px rgba(94, 234, 212, 0.85)); }
+      50% { filter: drop-shadow(0 0 3px #ffffff) drop-shadow(0 0 12px rgba(94, 234, 212, 1)); }
     }
     @keyframes dashMove {
       to { stroke-dashoffset: -24; }
@@ -384,6 +384,13 @@
     .zone-drill-selected path {
       pointer-events: none;
     }
+    .zone-boundary-highlight path,
+    .zone-selected path {
+      stroke-linejoin: round;
+      stroke-linecap: round;
+      filter: drop-shadow(0 0 2px #ffffff) drop-shadow(0 0 6px rgba(94, 234, 212, 0.9));
+      animation: zoneBoundaryPulse 2s ease-in-out infinite;
+    }
     .building-footprint-hit path {
       pointer-events: all !important;
       cursor: pointer;
@@ -435,7 +442,7 @@
     .err { color: #fda4af; padding: 0.85rem 1.1rem; font-size: 0.82rem; max-width: min(920px, 100%); white-space: pre-wrap; line-height: 1.45; border: 1px solid rgba(251,113,133,0.35); border-radius: 12px; margin: 0.75rem 1rem; background: rgba(127,29,29,0.2); }
     .leaflet-flow-line { stroke-linecap: round; }
     svg path.leaflet-flow-line { animation: dashMove 1.2s linear infinite; }
-    .zone-selected { animation: pulseRing 2s ease-out infinite; }
+    .leaflet-pane > svg path.leaflet-interactive:focus { outline: none; }
   </style>
 </head>
 <body data-dash-page="od-buildings">
@@ -463,7 +470,7 @@
 
     <aside class="sidebar">
       <div class="kpis" id="kpis">
-        <div class="kpi"><div class="label" id="kpi-trips-label">Car trips (expanded)</div><div class="value" id="kpi-trips">—</div><div class="sub" id="kpi-trips-sub"></div></div>
+        <div class="kpi"><div class="label" id="kpi-trips-label">Car trips</div><div class="value" id="kpi-trips">—</div><div class="sub" id="kpi-trips-sub"></div></div>
         <div class="kpi"><div class="label">CO₂ (kg)</div><div class="value" id="kpi-co2">—</div></div>
         <div class="kpi"><div class="label">Distance (km)</div><div class="value" id="kpi-km">—</div></div>
         <div class="kpi"><div class="label">Avg kg / trip</div><div class="value green" id="kpi-avg">—</div></div>
@@ -551,7 +558,7 @@
       return String(geoId != null ? geoId : '');
     }
 
-    /** Same host as this page when served by Flask; override with ?api=http://127.0.0.1:5055 */
+    /** Same host as this page when served by Flask; override with ?api=http://127.0.0.1:5051 */
     function apiBase() {
       try {
         const u = (new URLSearchParams(window.location.search).get('api') || '').trim();
@@ -586,7 +593,7 @@
       IS_ZONE_PAGE ? s.mapType === 'zone' : (IS_BUILDING_PAGE ? s.mapType === 'building' : true)
     );
     const mapViews = {};
-    let cachedBoundaryGj = null;
+    let cmmZonesBoundaryGeojson = null;
     let map = null;
     let flowLayer = null;
     let flowSvgRenderer = null;
@@ -647,9 +654,21 @@
       return {
         direction: 'top',
         opacity: 1,
-        sticky: true,
+        sticky: false,
         className: 'building-map-tooltip',
       };
+    }
+
+    function bindBuildingHoverTooltip(layer, building, map) {
+      if (!layer || !building) return;
+      layer.bindTooltip(buildingMetricsTooltipHtml(building), buildingTooltipOptions());
+      layer.on('mouseover', function () {
+        if (map) closeMapTooltips(map);
+        if (typeof layer.openTooltip === 'function') layer.openTooltip();
+      });
+      layer.on('mouseout', function () {
+        if (typeof layer.closeTooltip === 'function') layer.closeTooltip();
+      });
     }
 
     function buildingSelectionLabelText(building) {
@@ -1059,7 +1078,23 @@
     function addSelectedZoneOutline(viewKey, fc) {
       const v = mapViews[viewKey];
       if (!v || !v.map || !IS_BUILDING_PAGE || !selectedGeoId || !fc || !fc.features) return;
-      // Selected zone is already outlined by the choropleth; extra halo looked like grouped buildings.
+      disposeZoneOutlineLayer(viewKey);
+      const selFeat = fc.features.find((f) => zoneFeatureGeoId(f) === String(selectedGeoId));
+      if (!selFeat) return;
+      v.zoneOutlineLayer = L.geoJSON(selFeat, {
+        pane: 'zoneOutlinePane',
+        interactive: false,
+        style: {
+          fillOpacity: 0,
+          color: '#5eead4',
+          weight: 4,
+          opacity: 1,
+          className: 'zone-boundary-highlight',
+        },
+        onEachFeature(_feature, layer) {
+          if (layer._path) layer._path.style.pointerEvents = 'none';
+        },
+      }).addTo(v.map);
     }
 
     function closeMapTooltips(map) {
@@ -1088,7 +1123,10 @@
         if (ev) L.DomEvent.stop(ev);
         selectBuildingMarker(building, viewKey);
       });
-      marker.bindTooltip(buildingMetricsTooltipHtml(building), buildingTooltipOptions());
+      const v = mapViews[viewKey];
+      if (buildingHasTripActivity(building)) {
+        bindBuildingHoverTooltip(marker, building, v && v.map);
+      }
     }
 
     async function selectBuildingMarker(building, viewKey) {
@@ -1218,6 +1256,7 @@
       buildingZoneLoadToken++;
       selectedGeoId = zid;
       clearBuildingSelection();
+      notifyParentZoneSelection(zid, activeBuildingBy(), false);
       MAP_SPECS.filter(s => s.mapType === 'building').forEach(spec => {
         ensureMapViewData(spec.key);
         mapViews[spec.key].payload = { buildings: [], truncated: false };
@@ -1245,6 +1284,7 @@
       buildingZoneLoadToken++;
       selectedGeoId = null;
       clearBuildingSelection();
+      notifyParentZoneSelection('', activeBuildingBy(), true);
       MAP_SPECS.filter(s => s.mapType === 'building').forEach(spec => {
         ensureMapViewData(spec.key);
         mapViews[spec.key].payload = { buildings: [], truncated: false };
@@ -1289,7 +1329,7 @@
       } catch (net) {
         const hint = API
           ? ''
-          : '\n\nTip: open the app from the Flask URL (http://127.0.0.1:5055/) or add ?api=http://127.0.0.1:5055 to this page.';
+          : '\n\nTip: open the app from the Flask URL (http://127.0.0.1:5051/) or add ?api=http://127.0.0.1:5051 to this page.';
         throw new Error('Network error calling ' + (url || path) + ': ' + (net && net.message ? net.message : net) + hint);
       }
       const text = await r.text();
@@ -1350,11 +1390,13 @@
 
     function buildingMetricsTooltipHtml(b) {
       const m = normalizeBuildingMetrics(b);
-      const tripsLabel = formatTripsNum(buildingDisplayTrips(m)) + ' trips'
-        + ((Number(m.trips_weighted) > 0 && Number(m.trips_legs || m.trips) === 0) ? ' (expanded)' : '');
+      const tripsLabel = formatTripsNum(buildingDisplayTrips(m)) + ' trips';
+      const shareHint = m.trips_is_capacity_share
+        ? '<br><span style="color:#8b9cb8;font-size:10px">Zone household share (not routed legs)</span>'
+        : '';
       return '<div style="font-size:11px"><strong>Building ' + String(m.building_id) + '</strong><br>'
         + formatKgCo2e(m.total_emissions_g) + ' kg CO₂e · ' + tripsLabel + ' · '
-        + formatDistanceKm(m.total_distance_km) + '<br>'
+        + formatDistanceKm(m.total_distance_km) + shareHint + '<br>'
         + '<span style="color:#5eead4">Click for details</span></div>';
     }
     function zonesByIdFromList(zones) {
@@ -1394,6 +1436,31 @@
       if (!extraHtml) return body;
       return body.replace('</div>', extraHtml + '</div>');
     }
+
+    function zoneTooltipOptions() {
+      return {
+        direction: 'top',
+        opacity: 1,
+        sticky: false,
+        className: 'zone-map-tooltip',
+      };
+    }
+
+    function bindZoneHoverTooltip(layer, zid, propsOrZone, zonesById, actionHint, map) {
+      if (!layer) return;
+      const hint = actionHint || '';
+      layer.bindTooltip(
+        zoneTooltipHtml(zid, propsOrZone, zonesById, hint),
+        zoneTooltipOptions()
+      );
+      layer.on('mouseover', function () {
+        if (map) closeMapTooltips(map);
+        if (typeof layer.openTooltip === 'function') layer.openTooltip();
+      });
+      layer.on('mouseout', function () {
+        if (typeof layer.closeTooltip === 'function') layer.closeTooltip();
+      });
+    }
     /** Short axis labels for dense charts (full value still in tooltips). */
     function shortChartLabel(s, maxLen) {
       if (s == null || s === '') return '';
@@ -1423,6 +1490,28 @@
       0.75: '#fb923c',
       1: '#dc2626',
     };
+    const ZONE_NO_TRIP_FILL = '#475569';
+    const ZONE_NO_TRIP_STROKE = '#64748b';
+
+    function zoneDisplayTrips(props) {
+      const p = props || {};
+      const w = Number(p.trips_weighted);
+      if (Number.isFinite(w) && w > 0) return w;
+      return Number(p.trips != null ? p.trips : p.trips_legs) || 0;
+    }
+    function zoneHasTripActivity(props) {
+      return Math.round(zoneDisplayTrips(props)) > 0;
+    }
+    function zoneChoroplethFill(props) {
+      if (!zoneHasTripActivity(props)) return ZONE_NO_TRIP_FILL;
+      return emissionColor(emissionNormFromG((props && props.total_emissions_g) || 0));
+    }
+    function zoneChoroplethStroke(props, isSel, isIncoming) {
+      if (!zoneHasTripActivity(props)) return ZONE_NO_TRIP_STROKE;
+      if (isSel) return '#5eead4';
+      if (isIncoming) return '#14532d';
+      return '#166534';
+    }
 
     function collectZoneEmissionsG(payload) {
       const vals = [];
@@ -1511,28 +1600,43 @@
       return loadBuildingEmissionScale(activeBuildingBy());
     }
 
+    function formatLegendKgFromG(emissionsG) {
+      const kg = formatKgCo2e(emissionsG);
+      return kg + ' kg';
+    }
+
     function updateLegendTicks(scale, legendMode) {
-      const minT = scale.minG / 1e6;
-      const maxT = scale.maxG / 1e6;
-      const midT = (minT + maxT) / 2;
-      const fmtT = (t) => {
-        const n = Number(t) || 0;
-        return n >= 100 ? Math.round(n).toLocaleString() : (Math.round(n * 10) / 10).toLocaleString();
-      };
       const elMin = document.getElementById('legendEmissionsMin');
       const elMid = document.getElementById('legendEmissionsMid');
       const elMax = document.getElementById('legendEmissionsMax');
-      if (elMin) elMin.textContent = fmtT(minT);
-      if (elMid) elMid.textContent = fmtT(midT);
-      if (elMax) elMax.textContent = fmtT(maxT);
+      const useKg = legendMode === 'zone_buildings' || legendMode === 'island_buildings';
+      if (useKg) {
+        const minG = legendMode === 'zone_buildings' ? 0 : Math.max(0, scale.minG || 0);
+        const maxG = Math.max(minG + 1, scale.maxG || 1);
+        const midG = (minG + maxG) / 2;
+        if (elMin) elMin.textContent = formatLegendKgFromG(minG);
+        if (elMid) elMid.textContent = formatLegendKgFromG(midG);
+        if (elMax) elMax.textContent = formatLegendKgFromG(maxG);
+      } else {
+        const minT = scale.minG / 1e6;
+        const maxT = scale.maxG / 1e6;
+        const midT = (minT + maxT) / 2;
+        const fmtT = (t) => {
+          const n = Number(t) || 0;
+          return n >= 100 ? Math.round(n).toLocaleString() : (Math.round(n * 10) / 10).toLocaleString();
+        };
+        if (elMin) elMin.textContent = fmtT(minT);
+        if (elMid) elMid.textContent = fmtT(midT);
+        if (elMax) elMax.textContent = fmtT(maxT);
+      }
       const cap = document.getElementById('buildingLegendCaption');
       if (cap && IS_BUILDING_PAGE) {
         if (legendMode === 'zone') {
-          cap.textContent = 'Zone choropleth · click a zone to load building footprints';
+          cap.textContent = 'Zone choropleth (t CO₂) · click a zone to load building footprints';
         } else if (legendMode === 'zone_buildings') {
-          cap.textContent = 'All buildings (grey) · emissions color overlay · zone ' + zoneCt(selectedGeoId);
+          cap.textContent = 'Building emissions (kg CO₂e) · grey = no trips · zone ' + zoneCt(selectedGeoId);
         } else {
-          cap.textContent = 'Grey = all footprints · colors = emissions in current filter';
+          cap.textContent = 'Building emissions (kg CO₂e) · grey = no trips';
         }
       }
     }
@@ -1555,7 +1659,7 @@
         ? { minG: Math.min(...zoneVals), maxG: Math.max(...zoneVals) }
         : { minG: 0, maxG: 1 };
       buildingEmissionScale = bldgVals.length
-        ? { minG: Math.min(...bldgVals), maxG: Math.max(...bldgVals) }
+        ? { minG: 0, maxG: Math.max(...bldgVals) }
         : { minG: 0, maxG: 1 };
       const hasGlobalBuilding = globalBuildingEmissionScale.maxG > 0;
       const useZoneBuildings = IS_BUILDING_PAGE && !!selectedGeoId && bldgVals.length > 0;
@@ -1580,8 +1684,12 @@
       updateEmissionScales();
     }
 
+    /** Building CO₂ in kg (up to 2 decimal places). */
     function formatKgCo2e(emissionsG) {
-      return Math.round((Number(emissionsG) || 0) / 1000).toLocaleString();
+      const g = Number(emissionsG);
+      if (!Number.isFinite(g) || g === 0) return '0';
+      const kg = g / 1000;
+      return kg.toLocaleString(undefined, { maximumFractionDigits: 2, minimumFractionDigits: 0 });
     }
     function totalEmissionsKg(statsOrG) {
       if (statsOrG && typeof statsOrG === 'object') {
@@ -1672,23 +1780,24 @@
       return colorFromStops(EMISSION_COLOR_STOPS, tNorm);
     }
 
+    function styleFootprintHitPath(layer) {
+      if (!layer) return;
+      if (layer._path && layer._path.style) {
+        layer._path.style.pointerEvents = 'all';
+        layer._path.style.cursor = 'pointer';
+        return;
+      }
+      if (typeof layer.eachLayer === 'function') {
+        layer.eachLayer(styleFootprintHitPath);
+      }
+    }
+
     function enableBuildingFootprintHit(layer) {
       if (!layer) return;
       layer.on('add', function () {
-        const paths = [];
-        if (this._path) paths.push(this._path);
-        if (this._parts) paths.push.apply(paths, this._parts);
-        if (this._rings) {
-          this._rings.forEach(function (ring) {
-            if (ring && ring._path) paths.push(ring._path);
-          });
-        }
-        paths.forEach(function (path) {
-          if (!path) return;
-          path.style.pointerEvents = 'all';
-          path.style.cursor = 'pointer';
-        });
+        styleFootprintHitPath(this);
       });
+      if (layer._map) styleFootprintHitPath(layer);
     }
 
     function footprintInInventory(props, inventoryById) {
@@ -1698,10 +1807,23 @@
       return !!(inventoryById && inventoryById[String(p.building_id)]);
     }
 
-    function buildingFabricBaseStyle(props, hasSelection) {
+    function buildingFabricBaseStyle(props, hasSelection, inventoryById) {
       const p = props || {};
+      const metrics = buildingMetricsForStyle(p, inventoryById);
+      const noTrips = !buildingHasTripActivity(metrics);
       const isSel = hasSelection && footprintPartSelected(p);
       const isSibling = hasSelection && String(p.building_id) === selectedBuildingId && !isSel;
+      if (noTrips) {
+        return {
+          fillColor: BUILDING_NO_TRIP_COLOR,
+          fillOpacity: isSel ? 0.9 : (isSibling ? 0.35 : (hasSelection ? 0.62 : 0.78)),
+          color: isSel ? '#5eead4' : '#64748b',
+          weight: isSel ? 2.5 : 1,
+          opacity: isSibling ? 0.45 : 0.92,
+          fill: true,
+          stroke: true,
+        };
+      }
       return {
         fillColor: BUILDING_BASE_FILL,
         fillOpacity: isSel ? 0.82 : (isSibling ? 0.35 : (hasSelection ? 0.55 : 0.78)),
@@ -1730,11 +1852,13 @@
 
     function buildingHasTripActivity(b) {
       if (!b) return false;
-      const weighted = Number(b.trips_weighted);
-      if (Number.isFinite(weighted) && weighted > 0) return true;
-      const trips = Number(b.trips != null ? b.trips : b.trips_legs);
-      const emis = Number(b.total_emissions_g);
-      return (Number.isFinite(trips) && trips > 0) || (Number.isFinite(emis) && emis > 0);
+      return Math.round(Number(buildingDisplayTrips(b)) || 0) > 0;
+    }
+
+    function buildingMetricsForStyle(props, inventoryById) {
+      const p = props || {};
+      const inv = inventoryById && inventoryById[String(p.building_id)];
+      return inv || normalizeBuildingMetrics(p);
     }
 
     function buildingEmissionFillColor(b, scale) {
@@ -2041,10 +2165,17 @@
 
     function filterBuildingsToSelectedZone(buildings, viewKey) {
       if (!selectedGeoId || !buildings || !buildings.length) return buildings || [];
+      // API rows from /api/od/building_map?zone_geo_id= are already zone-scoped.
+      const zid = String(selectedGeoId);
+      const apiScoped = buildings.every(function (b) {
+        return b && (b.zone_geo_id == null || String(b.zone_geo_id) === zid);
+      });
+      if (apiScoped) return buildings;
       const geom = getSelectedZoneGeometry(viewKey);
       if (!geom) return buildings;
-      return buildings.filter(b => validLatLon(b.lat, b.lon)
+      const inside = buildings.filter(b => validLatLon(b.lat, b.lon)
         && pointInZoneGeometry(Number(b.lat), Number(b.lon), geom));
+      return inside.length ? inside : buildings;
     }
 
     function buildingSamplesForScale(payload, viewKey) {
@@ -2067,6 +2198,7 @@
           p.trips_weighted = b.trips_weighted;
           p.trips_display = b.trips_display;
           p.total_distance_km = b.total_distance_km;
+          p.trips_is_capacity_share = b.trips_is_capacity_share;
           p.in_inventory = true;
         } else {
           const z = normalizeBuildingMetrics(p);
@@ -2240,8 +2372,8 @@
             }
           }
         }
-        if (!selectedGeoId && cachedBoundaryGj) {
-          const bl = L.geoJSON(cachedBoundaryGj).getBounds();
+        if (!selectedGeoId && cmmZonesBoundaryGeojson) {
+          const bl = L.geoJSON(cmmZonesBoundaryGeojson).getBounds();
           if (bl && bl.isValid && bl.isValid()) {
             map.fitBounds(bl.pad(0.05), { maxZoom: 11, animate: false });
           }
@@ -2386,7 +2518,10 @@
         selectBuildingMarker(b, viewKey);
       });
       if (!(hasSelection && footprintPartSelected(p))) {
-        layer.bindTooltip(buildingMetricsTooltipHtml(b), buildingTooltipOptions());
+        if (footprintInInventory(p, inventoryById) && buildingHasTripActivity(b)) {
+          const map = mapViews[viewKey] && mapViews[viewKey].map;
+          bindBuildingHoverTooltip(layer, b, map);
+        }
       }
     }
 
@@ -2400,6 +2535,7 @@
         trips_legs: p.trips_legs,
         trips_weighted: p.trips_weighted,
         trips_display: p.trips_display,
+        trips_is_capacity_share: p.trips_is_capacity_share,
         total_distance_km: p.total_distance_km,
         lat: null,
         lon: null,
@@ -2466,6 +2602,42 @@
       window.setTimeout(function () { refreshBuildingMapPaint(viewKey); }, 150);
     }
 
+    function footprintIdsInFc(fc) {
+      const ids = new Set();
+      const features = (fc && fc.features) ? fc.features : [];
+      features.forEach(function (f) {
+        const bid = f && f.properties && f.properties.building_id;
+        if (bid != null) ids.add(String(bid));
+      });
+      return ids;
+    }
+
+    function renderBuildingPointMarkers(viewKey, buildings, hasSelection) {
+      const v = mapViews[viewKey];
+      if (!v || !v.map || !buildings || !buildings.length) return;
+      if (!v.buildingLayer) {
+        v.buildingLayer = L.layerGroup({ pane: 'buildingHitPane' }).addTo(v.map);
+      }
+      buildings.forEach(function (b) {
+        if (!validLatLon(b.lat, b.lon)) return;
+        const col = buildingEmissionFillColor(b, buildingEmissionScale);
+        const isSel = hasSelection && footprintPartSelected(b);
+        const m = L.circleMarker([b.lat, b.lon], {
+          pane: 'buildingHitPane',
+          radius: isSel ? 7 : 5,
+          stroke: true,
+          weight: isSel ? 2.5 : 1,
+          color: isSel ? '#5eead4' : 'rgba(15, 23, 42, 0.55)',
+          fillColor: col,
+          fillOpacity: hasSelection && !isSel ? 0.28 : 0.95,
+          interactive: true,
+          bubblingMouseEvents: false,
+        });
+        attachBuildingMarkerHandlers(m, b, viewKey);
+        m.addTo(v.buildingLayer);
+      });
+    }
+
     function footprintGeoJsonForRender(footprintFc) {
       if (!footprintFc || !footprintFc.features) return { type: 'FeatureCollection', features: [] };
       const exploded = explodeFootprintFc(footprintFc);
@@ -2485,102 +2657,113 @@
 
       if (!selectedGeoId) return;
 
-      const buildings = filterBuildingsToSelectedZone((payload && payload.buildings) ? payload.buildings : [], viewKey);
-      const valid = buildings.filter(b => validLatLon(b.lat, b.lon));
       const countEl = document.getElementById('bldgMapCount');
-      const truncated = payload && payload.truncated;
-      const footprintFc = payload && payload.footprintFc;
+      try {
+        ensureBuildingMapPanes(v.map);
+        v.map.invalidateSize({ animate: false });
 
-      const filteredPayload = { buildings: valid, truncated, footprintFc };
-      if (buildingHeatEnabled()) {
-        renderHeat(viewKey, filteredPayload, true);
-      } else if (v.heatLayer && v.map.hasLayer(v.heatLayer)) {
-        v.map.removeLayer(v.heatLayer);
-      }
+        const buildings = filterBuildingsToSelectedZone((payload && payload.buildings) ? payload.buildings : [], viewKey);
+        const valid = buildings.filter(b => validLatLon(b.lat, b.lon));
+        const truncated = payload && payload.truncated;
+        const footprintFc = payload && payload.footprintFc;
+        const fabricFc = footprintGeoJsonForRender(footprintFc);
 
-      const hasSelection = selectedBuildingId && selectedBuildingMapKey === viewKey;
-      const footprintFeatures = (footprintFc && footprintFc.features && footprintFc.features.length)
-        ? footprintFc.features
-        : [];
+        const filteredPayload = { buildings: valid, truncated, footprintFc: fabricFc };
+        if (buildingHeatEnabled()) {
+          renderHeat(viewKey, filteredPayload, true);
+        } else if (v.heatLayer && v.map.hasLayer(v.heatLayer)) {
+          v.map.removeLayer(v.heatLayer);
+        }
 
-      if (footprintFeatures.length) {
-        v.buildingFootprintLayer = L.geoJSON(footprintFc, {
-          pane: 'buildingHitPane',
-          filter(feature) {
-            const t = feature.geometry && feature.geometry.type;
-            return t === 'Polygon' || t === 'MultiPolygon';
-          },
-          style(feature) {
-            const p = normalizeBuildingMetrics(feature.properties || {});
-            const col = buildingEmissionFillColor(p, buildingEmissionScale);
-            const isSel = hasSelection && footprintPartSelected(p);
-            const isSibling = hasSelection && String(p.building_id) === selectedBuildingId && !isSel;
-            return {
-              fillColor: col,
-              fillOpacity: isSel ? 0.88 : (isSibling ? 0.2 : (hasSelection ? 0.45 : 0.72)),
-              color: isSel ? '#5eead4' : '#334155',
-              weight: isSel ? 2.5 : 1.25,
-              opacity: isSibling ? 0.35 : 1,
-            };
-          },
-          onEachFeature(feature, layer) {
-            const b = buildingFromFootprintFeature(feature);
-            if (!b.building_id) return;
-            const c = layer.getBounds && layer.getBounds().isValid && layer.getBounds().isValid()
-              ? layer.getBounds().getCenter()
-              : null;
-            if (c) {
-              b.lat = c.lat;
-              b.lon = c.lng;
-            }
-            layer.options.buildingId = String(b.building_id);
-            layer.on('click', (ev) => {
-              if (ev) L.DomEvent.stopPropagation(ev);
-              if (ev && ev.latlng) {
-                b._clickLat = ev.latlng.lat;
-                b._clickLon = ev.latlng.lng;
-              }
-              selectBuildingMarker(b, viewKey);
-            });
-            if (!(hasSelection && footprintPartSelected(feature.properties))) {
-              layer.bindTooltip(buildingMetricsTooltipHtml(b), buildingTooltipOptions());
-            }
-          },
-        }).addTo(v.map);
-      }
+        const hasSelection = selectedBuildingId && selectedBuildingMapKey === viewKey;
+        const inventoryById = {};
+        buildings.forEach(b => {
+          if (b && b.building_id != null) inventoryById[String(b.building_id)] = b;
+        });
+        const footprintFeatures = fabricFc.features || [];
 
-      if (!valid.length && !footprintFeatures.length) {
-        if (countEl) countEl.textContent = 'zone ' + selectedGeoId + ': 0 buildings';
-        return;
-      }
+        if (!valid.length && !footprintFeatures.length) {
+          if (countEl) countEl.textContent = 'zone ' + selectedGeoId + ': 0 buildings';
+          return;
+        }
 
-      if (!footprintFeatures.length) {
-        v.buildingLayer = L.layerGroup({ pane: 'buildingHitPane' }).addTo(v.map);
-        valid.forEach(b => {
-          const col = buildingEmissionFillColor(b, buildingEmissionScale);
-          const isSel = hasSelection && footprintPartSelected(b);
-          const m = L.circleMarker([b.lat, b.lon], {
+        if (footprintFeatures.length) {
+          v.buildingFabricLayer = L.geoJSON(fabricFc, {
             pane: 'buildingHitPane',
-            radius: isSel ? 7 : 5,
-            stroke: true,
-            weight: isSel ? 2.5 : 1,
-            color: isSel ? '#5eead4' : 'rgba(15, 23, 42, 0.55)',
-            fillColor: col,
-            fillOpacity: hasSelection && !isSel ? 0.28 : 0.95,
             interactive: true,
             bubblingMouseEvents: false,
-          });
-          attachBuildingMarkerHandlers(m, b, viewKey);
-          m.addTo(v.buildingLayer);
-        });
-      }
+            className: 'building-footprint-hit',
+            style(feature) {
+              return buildingFabricBaseStyle(feature.properties, hasSelection, inventoryById);
+            },
+            onEachFeature(feature, layer) {
+              attachBuildingFootprintHandlers(layer, feature, viewKey, inventoryById, hasSelection);
+            },
+          }).addTo(v.map);
 
-      const nShown = footprintFeatures.length || valid.length;
-      if (countEl) {
-        let txt = 'zone ' + selectedGeoId + ': ' + nShown.toLocaleString() + ' buildings';
-        if (truncated) txt += '+';
-        if (payload && payload.fabricTruncated) txt += ' · fabric truncated';
-        countEl.textContent = txt;
+          if (!buildingHeatEnabled()) {
+            const emissionFeatures = footprintFeatures.filter(function (f) {
+              return !!buildingEmissionOverlayStyle(
+                f.properties,
+                buildingEmissionScale,
+                inventoryById,
+                hasSelection
+              );
+            });
+            if (emissionFeatures.length) {
+              v.buildingEmissionLayer = L.geoJSON(
+                { type: 'FeatureCollection', features: emissionFeatures },
+                {
+                  pane: 'buildingEmissionPane',
+                  interactive: false,
+                  bubblingMouseEvents: false,
+                  className: 'building-emission-overlay',
+                  style(feature) {
+                    return buildingEmissionOverlayStyle(
+                      feature.properties,
+                      buildingEmissionScale,
+                      inventoryById,
+                      hasSelection
+                    ) || { fillOpacity: 0, opacity: 0, fill: false, stroke: false };
+                  },
+                }
+              ).addTo(v.map);
+            }
+          }
+
+          v.buildingFootprintLayer = v.buildingFabricLayer;
+        }
+
+        const drawnFootprintIds = footprintIdsInFc(fabricFc);
+        const markerOnly = valid.filter(function (b) {
+          return b && b.building_id != null && !drawnFootprintIds.has(String(b.building_id));
+        });
+        if (markerOnly.length) {
+          renderBuildingPointMarkers(viewKey, markerOnly, hasSelection);
+        } else if (!footprintFeatures.length && valid.length) {
+          renderBuildingPointMarkers(viewKey, valid, hasSelection);
+        }
+
+        const nFabric = footprintFeatures.length || valid.length;
+        const nInventory = buildings.length;
+        if (countEl) {
+          let txt = 'zone ' + selectedGeoId + ': ' + nFabric.toLocaleString() + ' footprints';
+          if (nInventory < nFabric) {
+            txt += ' · ' + nInventory.toLocaleString() + ' with trip data';
+          }
+          if (truncated) txt += ' · inventory filter truncated';
+          if (payload && payload.fabricTruncated) txt += ' · fabric truncated';
+          countEl.textContent = txt;
+        }
+        try {
+          rescheduleBuildingMapPaint(viewKey);
+        } catch (paintErr) {
+          console.warn('building map paint:', paintErr);
+        }
+      } catch (err) {
+        console.error('renderBuildingLayer:', err);
+        const msg = (err && err.message) ? String(err.message) : 'unknown error';
+        if (countEl) countEl.textContent = 'zone ' + selectedGeoId + ': render error — ' + msg;
       }
     }
 
@@ -2617,9 +2800,9 @@
                   fillColor: '#5eead4',
                   fillOpacity: 0,
                   color: '#5eead4',
-                  weight: 3.5,
+                  weight: 2.5,
                   opacity: 1,
-                  className: 'zone-selected zone-drill-selected',
+                  className: 'zone-drill-selected',
                 };
               }
               return {
@@ -2632,30 +2815,26 @@
               };
             }
             const dimOthers = IS_BUILDING_PAGE && selectedGeoId && !isSel;
+            const noTrips = !zoneHasTripActivity(p);
             const t = emissionNormFromG(g);
             return {
-              fillColor: isIncoming ? '#22c55e' : choroplethFillColor(t),
-              fillOpacity: isIncoming ? 0.82 : (isSel ? 0.92 : (dimOthers ? 0.28 : 0.78)),
-              color: isSel ? '#5eead4' : (isIncoming ? '#14532d' : '#166534'),
-              weight: isSel || isIncoming ? 2.5 : 1.15,
+              fillColor: noTrips ? ZONE_NO_TRIP_FILL : (isIncoming ? '#22c55e' : choroplethFillColor(t)),
+              fillOpacity: isIncoming ? 0.82 : (isSel ? 0.92 : (dimOthers ? 0.28 : (noTrips ? 0.72 : 0.78))),
+              color: zoneChoroplethStroke(p, isSel, isIncoming),
+              weight: isSel || isIncoming ? 2.5 : (noTrips ? 1.05 : 1.15),
               opacity: 0.95,
-              className: isSel || isIncoming ? 'zone-selected' : '',
+              className: isIncoming ? 'zone-selected' : '',
             };
           },
           onEachFeature(feature, layer) {
             const p = feature.properties || {};
             const zid = String(p.geo_id);
-            // In building drill-down, zone hover tooltips clash with building labels — click still switches zone.
-            const hideZoneTooltip = drillDown;
-            let actionHint = '';
-            if (zoneClickable && !hideZoneTooltip) {
-              actionHint = '<br><span style="color:#5eead4">Click to load buildings</span>';
-            }
-            if (!hideZoneTooltip) {
-              layer.bindTooltip(
-                zoneTooltipHtml(zid, p, zonesById, actionHint),
-                { direction: 'top', opacity: 1 }
-              );
+            const isSelZone = drillDown && String(p.geo_id) === String(selectedGeoId);
+            const actionHint = zoneClickable
+              ? '<br><span style="color:#5eead4">Click to load buildings</span>'
+              : '';
+            if (!isSelZone) {
+              bindZoneHoverTooltip(layer, zid, p, zonesById, actionHint, v.map);
             }
             if (zoneClickable) {
               layer.on('click', (ev) => {
@@ -2664,8 +2843,8 @@
               });
             }
             if (drillDown && layer._path) {
-              const sel = highlight && String(p.geo_id) === String(selectedGeoId);
-              layer._path.style.pointerEvents = sel ? 'none' : 'auto';
+              layer._path.style.pointerEvents = isSelZone ? 'none' : 'auto';
+              layer._path.style.cursor = isSelZone ? '' : 'pointer';
             }
           },
         }).addTo(v.map);
@@ -2690,14 +2869,14 @@
           color: isSel ? '#5eead4' : (drillDown ? '#334155' : (isIncoming ? '#14532d' : '#166534')),
           fillColor: drillDown ? (isSel ? '#5eead4' : '#94a3b8') : (isIncoming ? '#22c55e' : col),
           fillOpacity: drillDown ? (isSel ? 0.15 : 0.35) : (isIncoming ? 0.9 : 0.88),
-          className: (isSel || isIncoming ? 'zone-selected ' : '') + (drillDown && !isSel ? 'zone-drill-peer' : ''),
+          className: (isIncoming ? 'zone-selected ' : '') + (drillDown && !isSel ? 'zone-drill-peer' : ''),
         });
-        if (!drillDown) {
-          m.bindTooltip(
-            zoneTooltipHtml(z.geo_id, z, zonesById,
-              zoneClickable ? '<br><span style="color:#5eead4">Click to load buildings</span>' : ''),
-            { direction: 'top', opacity: 1 }
-          );
+        const actionHint = zoneClickable
+          ? '<br><span style="color:#5eead4">Click to load buildings</span>'
+          : '';
+        const isSelMarker = drillDown && isSel;
+        if (!isSelMarker) {
+          bindZoneHoverTooltip(m, zid, z, zonesById, actionHint, v.map);
         }
         if (zoneClickable) {
           m.on('click', () => selectBuildingZone(z.geo_id));
@@ -2765,6 +2944,7 @@
         gridLayer: null,
         heatLayer: null,
         boundaryLayer: null,
+        zonesBoundaryLayer: null,
         buildingLayer: null,
         buildingHighlightLayer: null,
         buildingHighlightFill: null,
@@ -2798,6 +2978,8 @@
       }).setView([45.52, -73.68], 10);
       m.createPane('heatPane');
       m.getPane('heatPane').style.zIndex = 410;
+      m.createPane('zoneBgPane');
+      m.getPane('zoneBgPane').style.zIndex = 405;
       m.createPane('zonePane');
       m.getPane('zonePane').style.zIndex = 430;
       if (spec.mapType === 'building') {
@@ -2819,13 +3001,10 @@
         m.createPane('flowPane');
         m.getPane('flowPane').style.zIndex = 650;
       }
-      L.tileLayer('https://{s}.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}{r}.png', {
-        attribution: '&copy; OpenStreetMap &copy; CARTO',
-        subdomains: 'abcd',
-        maxZoom: 20,
+      DashMapBasemap.addTo(m, 'light_nolabels', {
         keepBuffer: 4,
         updateWhenZooming: false,
-      }).addTo(m);
+      });
       m.fitBounds([[45.38, -74.0], [45.68, -73.35]], { animate: false });
       return {
         ...spec,
@@ -2834,6 +3013,7 @@
         gridLayer: null,
         heatLayer: null,
         boundaryLayer: null,
+        zonesBoundaryLayer: null,
         buildingLayer: null,
         buildingHighlightLayer: null,
         buildingHighlightFill: null,
@@ -2854,29 +3034,57 @@
 
     function applyBoundaryToView(viewKey) {
       const v = mapViews[viewKey];
-      if (!v || !v.map || !cachedBoundaryGj) return;
+      if (!v || !v.map) return;
       if (v.boundaryLayer) {
         v.map.removeLayer(v.boundaryLayer);
         v.boundaryLayer = null;
       }
-      v.boundaryLayer = L.geoJSON(cachedBoundaryGj, {
+    }
+
+    function applyCmmBoundaryToView(viewKey) {
+      const v = mapViews[viewKey];
+      if (!v || !v.map || !cmmZonesBoundaryGeojson) return;
+      if (v.zonesBoundaryLayer) {
+        v.map.removeLayer(v.zonesBoundaryLayer);
+        v.zonesBoundaryLayer = null;
+      }
+      v.zonesBoundaryLayer = L.geoJSON(cmmZonesBoundaryGeojson, {
+        pane: 'zoneBgPane',
         interactive: false,
         style: () => ({
-          color: '#14b8a6',
-          weight: 2,
-          opacity: 0.9,
-          fill: false,
+          color: 'rgba(100, 116, 139, 0.72)',
+          weight: 1.05,
+          opacity: 0.88,
           fillOpacity: 0,
+          fill: false,
         }),
       }).addTo(v.map);
     }
 
-    function fitAllMapsToBoundary() {
-      const firstKey = Object.keys(mapViews).find(k => mapViews[k] && mapViews[k].boundaryLayer);
-      const v0 = firstKey ? mapViews[firstKey] : null;
-      if (!v0 || !v0.boundaryLayer) return;
+    function applyCmmZoneBoundariesToMaps(gj) {
+      if (!gj || gj.type !== 'FeatureCollection' || !gj.features || !gj.features.length) return;
+      cmmZonesBoundaryGeojson = gj;
+      Object.keys(mapViews).forEach(applyCmmBoundaryToView);
+    }
+
+    async function loadCmmZoneBoundaries() {
       try {
-        const b = v0.boundaryLayer.getBounds();
+        if (!cmmZonesBoundaryGeojson) {
+          const raw = await fetchJson('/api/od/zones_boundary?island_only=1');
+          cmmZonesBoundaryGeojson = raw && raw.geojson;
+        }
+        applyCmmZoneBoundariesToMaps(cmmZonesBoundaryGeojson);
+      } catch (e) {
+        console.warn('CMM zone boundaries:', e);
+      }
+    }
+
+    function fitAllMapsToBoundary() {
+      const firstKey = Object.keys(mapViews).find(k => mapViews[k] && mapViews[k].zonesBoundaryLayer);
+      const v0 = firstKey ? mapViews[firstKey] : null;
+      if (!v0 || !v0.zonesBoundaryLayer) return;
+      try {
+        const b = v0.zonesBoundaryLayer.getBounds();
         if (b && b.isValid && b.isValid()) {
           Object.keys(mapViews).forEach(key => {
             const v = mapViews[key];
@@ -2887,15 +3095,7 @@
     }
 
     async function loadMontrealBoundary() {
-      try {
-        const gj = await fetchJson('/api/montreal_boundary.geojson');
-        if (!gj || gj.type !== 'FeatureCollection' || !gj.features || !gj.features.length) return;
-        cachedBoundaryGj = gj;
-        Object.keys(mapViews).forEach(applyBoundaryToView);
-        fitAllMapsToBoundary();
-      } catch (e) {
-        console.warn('Montreal boundary:', e);
-      }
+      /* Island buffer outline intentionally hidden — zone mesh boundaries remain visible. */
     }
 
     function ensureMapView(key) {
@@ -2917,6 +3117,7 @@
       if (savedZonePayload) mapViews[key].zonePayload = savedZonePayload;
       if (savedPayload) mapViews[key].payload = savedPayload;
       applyBoundaryToView(key);
+      applyCmmBoundaryToView(key);
       if (IS_BUILDING_PAGE) {
         const v = mapViews[key];
         if (v.zonePayload) renderZoneLayer(key, v.zonePayload);
@@ -3094,6 +3295,154 @@
       return { legs, expanded, emisLegs, kmLegs, avgLegsG };
     }
 
+    function zoneStatsFromRow(row, geoId) {
+      const r = row || {};
+      const trips = Number(r.trips) || 0;
+      const tripsW = Number(r.trips_weighted != null ? r.trips_weighted : trips) || 0;
+      const emis = Number(r.total_emissions_g) || 0;
+      const emisW = Number(r.total_emissions_g_weighted != null ? r.total_emissions_g_weighted : emis) || 0;
+      const km = Number(r.total_distance_km) || 0;
+      const kmW = Number(r.total_distance_km_weighted != null ? r.total_distance_km_weighted : km) || 0;
+      return {
+        geo_id: String(geoId),
+        trips,
+        trips_weighted: tripsW,
+        total_emissions_g: emis,
+        total_emissions_g_weighted: emisW,
+        total_distance_km: km,
+        total_distance_km_weighted: kmW,
+        avg_emissions_g_per_trip: trips > 0 ? emis / trips : 0,
+        kpi_scope: 'zone',
+      };
+    }
+
+    function findZoneRowForBuilding(geoId, zoneBy) {
+      const zb = zoneBy === 'dest' ? 'dest' : 'rules';
+      const key = zb === 'dest' ? 'bldgDest' : 'bldgRules';
+      const zp = mapViews[key] && mapViews[key].zonePayload;
+      if (!zp) return null;
+      const id = String(geoId);
+      return (zp.zones || []).find(z => String(z.geo_id) === id) || null;
+    }
+
+    function scaleCategoriesForZone(islandCats, zoneStats) {
+      if (!islandCats || !islandCats.length || !zoneStats) return [];
+      const zEm = Number(zoneStats.total_emissions_g) || 0;
+      const zTrips = Number(zoneStats.trips) || 0;
+      const zKm = Number(zoneStats.total_distance_km) || 0;
+      const islandEm = islandCats.reduce((a, c) => a + (Number(c.total_emissions_g) || 0), 0);
+      const islandTrips = islandCats.reduce((a, c) => a + (Number(c.trips) || 0), 0);
+      const islandKm = islandCats.reduce((a, c) => a + (Number(c.total_distance_km) || 0), 0);
+      if (islandEm <= 0 || zEm <= 0) return [];
+      const emisRatio = zEm / islandEm;
+      const tripsRatio = islandTrips > 0 ? (zTrips / islandTrips) : emisRatio;
+      const kmRatio = islandKm > 0 ? (zKm / islandKm) : emisRatio;
+      return islandCats.map(c => ({
+        category: c.category,
+        trips: (Number(c.trips) || 0) * tripsRatio,
+        total_emissions_g: (Number(c.total_emissions_g) || 0) * emisRatio,
+        total_distance_km: (Number(c.total_distance_km) || 0) * kmRatio,
+      }));
+    }
+
+    function updateChartTitles(zoneLabel) {
+      const suffix = zoneLabel ? (' · ' + zoneLabel) : ' · island';
+      const titles = [
+        { sel: '#chart-emissions', base: 'Emissions by category (t CO₂)' },
+        { sel: '#chart-trips', base: 'Trips by category' },
+        { sel: '#chart-donut', base: 'Emissions share' },
+        { sel: '#chart-distance', base: 'Distance by category (km)' },
+      ];
+      titles.forEach(item => {
+        const canvas = document.querySelector(item.sel);
+        const card = canvas && canvas.closest ? canvas.closest('.card') : null;
+        const h = card && card.querySelector ? card.querySelector('h3') : null;
+        if (h) h.textContent = item.base + suffix;
+      });
+    }
+
+    function applySidebarCharts(byCategory, zoneStats, zoneLabel) {
+      const islandCats = (bootCacheBuildings && bootCacheBuildings.by_category) || [];
+      const cats = (byCategory && byCategory.length)
+        ? byCategory
+        : scaleCategoriesForZone(islandCats, zoneStats);
+      if (cats && cats.length) {
+        initCharts(cats);
+        updateChartTitles(zoneLabel || '');
+      }
+    }
+
+    async function refreshBuildingZoneSidebar(geoId, zoneBy) {
+      const gid = String(geoId || '').trim();
+      if (!gid) {
+        const bootStats = (bootCacheBuildings && bootCacheBuildings.stats_island_eligible)
+          || (bootCacheBuildings && bootCacheBuildings.stats_rules)
+          || (bootCacheBuildings && bootCacheBuildings.stats)
+          || null;
+        if (bootStats) {
+          applyKpiStats(bootStats);
+          if (bootCacheBuildings && bootCacheBuildings.by_category) {
+            initCharts(bootCacheBuildings.by_category);
+            updateChartTitles('');
+          }
+        }
+        return;
+      }
+      const zb = zoneBy === 'dest' ? 'dest' : 'rules';
+      const row = findZoneRowForBuilding(gid, zb) || {};
+      const instantStats = Object.assign({}, zoneStatsFromRow(row, gid), {
+        zone_label: zoneCt(gid, row),
+        kpi_scope: 'zone',
+      });
+      applyKpiStats(instantStats);
+      applySidebarCharts(null, instantStats, instantStats.zone_label);
+      try {
+        const data = await fetchJson(
+          '/api/od/zone_sidebar?geo_id=' + encodeURIComponent(gid) + '&zone_by=' + zb
+        );
+        if (data && data.stats) {
+          applyKpiStats(Object.assign({}, data.stats, {
+            zone_label: data.zone_label || zoneCt(gid, row),
+            kpi_scope: 'zone',
+          }));
+        }
+        applySidebarCharts(
+          data && data.by_category,
+          (data && data.stats) || instantStats,
+          (data && data.zone_label) || instantStats.zone_label
+        );
+      } catch (e) {
+        console.warn('zone sidebar:', e);
+      }
+    }
+
+    function notifyParentZoneSelection(geoId, zoneBy, clear) {
+      const gid = String(geoId || '').trim();
+      const zb = zoneBy === 'dest' ? 'dest' : 'rules';
+      if (IS_EMBED && window.parent !== window) {
+        if (clear || !gid) {
+          window.parent.postMessage({
+            type: 'dash-zone-select',
+            clear: true,
+            geo_id: '',
+            zone_by: zb,
+          }, '*');
+          return;
+        }
+        const row = findZoneRowForBuilding(gid, zb) || {};
+        window.parent.postMessage({
+          type: 'dash-zone-select',
+          geo_id: gid,
+          zone_by: zb,
+          clear: false,
+          stats: zoneStatsFromRow(row, gid),
+          zone_label: zoneCt(gid, row),
+        }, '*');
+        return;
+      }
+      refreshBuildingZoneSidebar(gid, zb).catch(err => console.warn('building zone sidebar:', err));
+    }
+
     function applyKpiStats(stats) {
       if (!stats) return;
       const trips = Number(stats.trips_weighted ?? stats.trips) || 0;
@@ -3103,13 +3452,19 @@
       const kg = totalEmissionsKg(emis);
       const avgKg = avgEmissionsKgPerTrip(avgG);
       const labelEl = document.getElementById('kpi-trips-label');
-      if (labelEl) labelEl.textContent = 'Car trips (expanded)';
+      if (labelEl) {
+        labelEl.textContent = stats.kpi_scope === 'zone' ? 'Car trips · zone' : 'Car trips';
+      }
       document.getElementById('kpi-trips').textContent = formatTripsNum(trips);
       const subEl = document.getElementById('kpi-trips-sub');
       if (subEl) {
-        subEl.textContent = stats.kpi_scope === 'island_eligible'
-          ? 'CMM residents · island-touch'
-          : '';
+        if (stats.zone_label) {
+          subEl.textContent = stats.zone_label;
+        } else if (stats.kpi_scope === 'island_eligible') {
+          subEl.textContent = 'CMM residents · island-touch';
+        } else {
+          subEl.textContent = '';
+        }
       }
       document.getElementById('kpi-co2').textContent = kg != null ? formatNum(kg) : '—';
       document.getElementById('kpi-km').textContent = formatNum(km);
@@ -3151,7 +3506,6 @@
     function signalEmbedMapShellReady() {
       if (!IS_EMBED || !window.DashEmbed) return;
       DashEmbed.notifyReady();
-      DashEmbed.notifyDataReady({ zones: 0, shell: true });
       DashEmbed.syncHint();
     }
 
@@ -3159,8 +3513,18 @@
       if (!IS_EMBED || !window.DashEmbed) return;
       const zp = mapViews.bldgRules && mapViews.bldgRules.zonePayload;
       const n = (zp && zp.zones && zp.zones.length) || 0;
-      DashEmbed.notifyDataReady({ zones: n });
+      DashEmbed.notifyDataReady({ zones: n, mapReady: true });
       DashEmbed.syncHint();
+    }
+
+    async function waitForMapPaint() {
+      finishEmbedMapPaint();
+      await new Promise(function (r) {
+        window.requestAnimationFrame(function () {
+          window.requestAnimationFrame(r);
+        });
+      });
+      await new Promise(function (r) { window.setTimeout(r, 180); });
     }
 
     function finishEmbedMapPaint() {
@@ -3187,9 +3551,9 @@
       finishEmbedMapPaint();
       if (!IS_EMBED) setKpiLoading(true);
       const motifLimit = (new URLSearchParams(window.location.search).get('motif_limit') || '24').trim() || '24';
-      const bootUrl = '/api/od/bootstrap';
+      const bootUrl = '/api/od/home';
       const bootPromise = fetchJson(bootUrl).catch(err => {
-        console.error('bootstrap:', err);
+        console.error('home:', err);
         return null;
       });
       const zoneCodesPromise = fetchJson('/api/zone_codes').catch(() => null);
@@ -3199,7 +3563,7 @@
         return err;
       });
       const [, boot, zoneCodes] = await Promise.all([
-        loadMontrealBoundary(), bootPromise, zoneCodesPromise,
+        loadMontrealBoundary(), loadCmmZoneBoundaries(), bootPromise, zoneCodesPromise,
       ]);
       bootCacheBuildings = boot;
       syncGlobalBuildingScaleFromCache();
@@ -3248,6 +3612,9 @@
                   refitActiveBuildingMap();
                   updateBuildingPageHint();
                   refreshSelectedBuildingForActiveView();
+                  if (selectedGeoId) {
+                    notifyParentZoneSelection(selectedGeoId, activeBuildingBy(), false);
+                  }
                 });
               });
             },
@@ -3301,7 +3668,7 @@
         const zoneErr = await zonesPromise;
         await refreshLegendScales();
         renderAllBuildingMaps(true);
-        finishEmbedMapPaint();
+        await waitForMapPaint();
         signalEmbedMapDataReady();
 
         if (zoneErr instanceof Error) {

@@ -10,6 +10,7 @@ env/
 # Secrets / local config
 .env
 .env.*
+deploy.env
 *.pem
 
 # OS / editor
@@ -25,3 +26,9 @@ data/db/*.dump
 # Logs / temp
 *.log
 *.tmp
+_boot_test.json
+_tmp_check.js
+_tmp_*
+
+# Local exports / scratch
+data/export/

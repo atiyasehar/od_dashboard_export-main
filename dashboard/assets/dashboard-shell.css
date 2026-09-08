@@ -291,6 +291,47 @@ header.shell {
   font-size: 0.7rem;
 }
 
+.flows-table-wrap th.flows-sort-th {
+  padding: 0;
+  white-space: nowrap;
+}
+
+.flows-sort-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  width: 100%;
+  padding: 0.35rem 0.3rem;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.75rem;
+  font-weight: 600;
+  cursor: pointer;
+  text-align: right;
+  border-radius: 4px;
+}
+
+.flows-sort-btn:hover {
+  color: var(--text);
+  background: rgba(148, 163, 184, 0.08);
+}
+
+.flows-sort-th.is-active .flows-sort-btn {
+  color: var(--accent);
+}
+
+.flows-sort-btn .sort-icon {
+  font-size: 0.68rem;
+  opacity: 0.55;
+  line-height: 1;
+}
+
+.flows-sort-th.is-active .flows-sort-btn .sort-icon {
+  opacity: 1;
+}
+
 .flows-empty {
   color: var(--muted);
   font-size: 0.82rem;

@@ -67,8 +67,9 @@ html.dash-embed .map-top-legend-row .emissions-legend-wrap {
   flex: 1 1 auto;
   min-width: 0;
   display: flex;
-  align-items: center;
-  gap: 0.35rem 0.5rem;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.18rem;
   padding: 0;
   margin: 0;
   border: 0;
@@ -103,19 +104,24 @@ html.dash-embed .map-top-strip .map-toolbar-title {
 }
 
 html.dash-embed .map-top-strip .emissions-legend-gradient {
-  flex: 1 1 100px;
-  min-width: 72px;
-  max-width: 200px;
+  flex: 0 0 auto;
+  width: 100%;
+  min-width: 0;
+  max-width: none;
   height: 8px;
   border-radius: 3px;
 }
 
 html.dash-embed .map-top-strip .emissions-legend-ticks {
   display: flex;
-  gap: 0.45rem;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 0.25rem;
+  width: 100%;
   margin: 0;
   font-size: 0.6rem;
   font-weight: 600;
+  font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
 

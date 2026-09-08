@@ -19,6 +19,7 @@
     apiPrefix: '/api',
     apiBase: '',
     showBoundaryButton: true,
+    offline: false,
   };
 
   function apiBase() {
@@ -57,6 +58,16 @@
     return state.showBoundaryButton !== false;
   }
 
+  function offline() {
+    return state.offline === true;
+  }
+
+  function applyOfflineClass() {
+    if (!offline()) return;
+    if (document.documentElement) document.documentElement.classList.add('dash-offline');
+    if (document.body) document.body.classList.add('dash-offline');
+  }
+
   function applyBoundaryNav() {
     var hide = !showBoundaryButton();
     if (document.body) {
@@ -91,6 +102,7 @@
     state.apiPrefix = normPrefix(cfg.apiPrefix || '/api') || '/api';
     state.apiBase = cfg.apiBase ? normPrefix(cfg.apiBase) : '';
     state.showBoundaryButton = cfg.showBoundaryButton !== false;
+    state.offline = cfg.offline === true;
     global.DashConfig = {
       urlPrefix: state.urlPrefix,
       apiPrefix: state.apiPrefix,
@@ -101,8 +113,10 @@
       spaHistoryUrl: spaHistoryUrl,
       showBoundaryButton: showBoundaryButton,
       applyBoundaryNav: applyBoundaryNav,
+      offline: offline,
     };
     scheduleBoundaryNav();
+    applyOfflineClass();
   }
 
   global.DashApplyDeploy = applyDeploy;

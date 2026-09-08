@@ -1,0 +1,14 @@
+/* Offline deploy: system fonts + map canvas background (no CDN tiles). */
+html.dash-offline body,
+body.dash-offline {
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+}
+
+.leaflet-container.dash-offline-basemap,
+.dash-offline-basemap.leaflet-container {
+  background: #121a26;
+  background-image:
+    linear-gradient(rgba(94, 129, 172, 0.06) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(94, 129, 172, 0.06) 1px, transparent 1px);
+  background-size: 24px 24px;
+}
