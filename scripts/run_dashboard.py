@@ -19,6 +19,7 @@ import sys
 import traceback
 from functools import wraps
 from pathlib import Path
+from urllib.parse import urlencode
 
 import psycopg2
 from flask import Flask, Response, jsonify, redirect, request, send_from_directory
@@ -33,6 +34,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import dashboard_server as _dashboard_server  # noqa: E402
 
 from zone_map_anchors import fetch_zone_flow_anchors, patch_flow_payload_anchors  # noqa: E402
+from transit_overlay import get_transit_network  # noqa: E402
 
 from dashboard_server import (  # noqa: E402
     CMM_BOUNDS,
@@ -53,10 +55,12 @@ from dashboard_server import (  # noqa: E402
     _attach_zone_code,
     _flow_coord,
     _geom_json_to_feature,
+    _parse_geo_id_list,
     _resolve_geo_id_query,
     _short_zone_id,
     _zone_code_for,
     _zone_code_index,
+    _zone_geo_id_pred,
     _zone_name_for,
     _zone_name_index,
     _zone_label_for,
@@ -75,6 +79,11 @@ from dashboard_server import (  # noqa: E402
 
 DB_PARAMS = dict(_dashboard_server.DB_PARAMS)
 SCHEMA = _dashboard_server.SCHEMA
+
+
+def _request_geo_ids(*keys: str) -> list[str]:
+    """Parse one or more query params (geo_id, geo_ids, dest_geo_id, …) into unique ids."""
+    return _parse_geo_id_list(*(request.args.get(k) for k in keys))
 
 
 def get_conn():
@@ -625,13 +634,13 @@ def _od10_interzonal_flow_filter_sql(alias: str = "f") -> str:
     return f"AND {p}orig_geo_id::text IS DISTINCT FROM {p}dest_geo_id::text"
 
 
-def _od10_zone_dest_totals(cur, zone_by: str, dest_id: str) -> dict | None:
-    """Zone-wide KPI totals for a destination (includes intra-zone trips)."""
+def _od10_zone_dest_totals(cur, zone_by: str, dest_id: str | list[str]) -> dict | None:
+    """Zone-wide KPI totals for one or more destinations (includes intra-zone trips)."""
     zone_t = _od10_zone_table(cur, zone_by)
     if not zone_t:
         return None
-    gid = str(dest_id or "").strip()
-    if not gid:
+    ids = _parse_geo_id_list(dest_id)
+    if not ids:
         return None
     cols = _od10_zone_col_names(cur, zone_t, zone_by)
     trips_c, emis_c = _od10_zone_kpi_cols(cur, zone_t, zone_by=zone_by)
@@ -641,11 +650,13 @@ def _od10_zone_dest_totals(cur, zone_by: str, dest_id: str) -> dict | None:
         dist_c = cols["distance_km"]
     cur.execute(
         f"""
-        SELECT {trips_c}, {emis_c}, COALESCE({dist_c}, 0)::double precision
+        SELECT COALESCE(SUM({trips_c}), 0)::double precision,
+               COALESCE(SUM({emis_c}), 0)::double precision,
+               COALESCE(SUM({dist_c}), 0)::double precision
         FROM {SCHEMA}.{zone_t}
-        WHERE geo_id::text = %s
+        WHERE geo_id::text = ANY(%s)
         """,
-        (gid,),
+        (ids,),
     )
     row = cur.fetchone()
     if not row:
@@ -685,10 +696,11 @@ def _od10_intra_zone_flow(
 
 def _od10_enrich_incoming_payload(cur, payload: dict, zone_by: str) -> None:
     """Attach zone totals and intra-zone flow derived from zone KPI minus incoming."""
-    dest_id = str(payload.get("dest_geo_id") or "").strip()
-    if not dest_id:
+    dest_ids = _parse_geo_id_list(payload.get("dest_geo_ids"), payload.get("dest_geo_id"))
+    if not dest_ids:
         return
-    zone_totals = _od10_zone_dest_totals(cur, zone_by, dest_id)
+    dest_id = dest_ids[0]
+    zone_totals = _od10_zone_dest_totals(cur, zone_by, dest_ids)
     if zone_totals:
         payload["dest_zone_trips"] = zone_totals["trips"]
         payload["dest_zone_emissions_g"] = zone_totals["total_emissions_g"]
@@ -998,6 +1010,32 @@ def api_od10_zones_boundary():
         })
     finally:
         conn.close()
+
+
+def _project_root() -> Path:
+    data = getattr(_dashboard_server, "REPO_DATA_DIR", None)
+    if data:
+        return Path(data).resolve().parent
+    if _BUNDLE_ROOT:
+        return _BUNDLE_ROOT
+    return Path(__file__).resolve().parent.parent
+
+
+@app.route("/api/od/transit_network")
+@app.route("/api/transit_network")
+def api_od_transit_network():
+    """Official GTFS lines and stops for STM, REM, and exo."""
+    group = (request.args.get("group") or "rail").strip().lower()
+    refresh = str(request.args.get("refresh") or "").strip().lower() in ("1", "true", "yes")
+    try:
+        payload = get_transit_network(_project_root(), group=group, refresh=refresh)
+    except Exception as exc:
+        return jsonify({
+            "error": "transit_unavailable",
+            "message": str(exc),
+            "group": "bus" if group == "bus" else "rail",
+        }), 503
+    return jsonify(payload)
 
 
 OD10_DETAIL_CANDIDATES = (
@@ -1496,41 +1534,41 @@ def api_od10_bootstrap():
         conn.close()
 
 
-def _od10_single_zone_stats(cur, geo_id: str, *, zone_by: str) -> dict | None:
-    """KPI block for one zone row from zone_emissions_od10."""
+def _od10_single_zone_stats(cur, geo_id: str | list[str], *, zone_by: str) -> dict | None:
+    """KPI block for one or more zone rows from zone_emissions_od10."""
     ztab = _od10_zone_unified_table(cur)
     if not ztab:
         return None
-    gid = str(geo_id or "").strip()
-    if not gid:
+    ids = _parse_geo_id_list(geo_id)
+    if not ids:
         return None
     mode = "dest" if (zone_by or "rules").strip().lower() == "dest" else "rules"
     cols = _od10_zone_col_names(cur, ztab, mode)
     if _od10_has_weighted_columns(cur, ztab, zone_by=mode):
         cur.execute(
             f"""
-            SELECT COALESCE({cols['trips']}, 0)::double precision,
-                   COALESCE({cols['trips_weighted']}, 0)::double precision,
-                   COALESCE({cols['emissions_g']}, 0)::double precision,
-                   COALESCE({cols['emissions_g_weighted']}, 0)::double precision,
-                   COALESCE({cols['distance_km']}, 0)::double precision,
-                   COALESCE({cols['distance_km_weighted']}, 0)::double precision
+            SELECT COALESCE(SUM({cols['trips']}), 0)::double precision,
+                   COALESCE(SUM({cols['trips_weighted']}), 0)::double precision,
+                   COALESCE(SUM({cols['emissions_g']}), 0)::double precision,
+                   COALESCE(SUM({cols['emissions_g_weighted']}), 0)::double precision,
+                   COALESCE(SUM({cols['distance_km']}), 0)::double precision,
+                   COALESCE(SUM({cols['distance_km_weighted']}), 0)::double precision
             FROM {SCHEMA}.{ztab}
-            WHERE geo_id::text = %s
+            WHERE geo_id::text = ANY(%s)
             """,
-            (gid,),
+            (ids,),
         )
         trips, trips_w, emis_g, emis_w, dist_km, dist_w = cur.fetchone() or (0, 0, 0, 0, 0, 0)
     else:
         cur.execute(
             f"""
-            SELECT COALESCE({cols['trips']}, 0)::double precision,
-                   COALESCE({cols['emissions_g']}, 0)::double precision,
-                   COALESCE({cols['distance_km']}, 0)::double precision
+            SELECT COALESCE(SUM({cols['trips']}), 0)::double precision,
+                   COALESCE(SUM({cols['emissions_g']}), 0)::double precision,
+                   COALESCE(SUM({cols['distance_km']}), 0)::double precision
             FROM {SCHEMA}.{ztab}
-            WHERE geo_id::text = %s
+            WHERE geo_id::text = ANY(%s)
             """,
-            (gid,),
+            (ids,),
         )
         row = cur.fetchone() or (0, 0, 0)
         trips, emis_g, dist_km = row
@@ -1544,7 +1582,9 @@ def _od10_single_zone_stats(cur, geo_id: str, *, zone_by: str) -> dict | None:
     dist_km = float(dist_km or 0)
     dist_w = float(dist_w or 0)
     out = {
-        "geo_id": gid,
+        "geo_id": ids[0],
+        "geo_ids": ids,
+        "zone_count": len(ids),
         "zone_by": mode,
         "trips": trips,
         "trips_legs": trips,
@@ -1628,7 +1668,7 @@ def _od10_zone_detail_column(cur, detail: str, *, zone_by: str) -> str | None:
 
 
 def _od10_zone_match_sql(alias: str, zcol: str) -> str:
-    return f"split_part(btrim({alias}.{zcol}::text), '.', 1) = %s"
+    return f"split_part(btrim({alias}.{zcol}::text), '.', 1) = ANY(%s)"
 
 
 def _od10_detail_travel_reason_bucket_sql(cur, detail: str, alias: str = "d") -> str | None:
@@ -1701,13 +1741,13 @@ def _od10_scale_categories_for_zone(
     return out
 
 
-def _od10_zone_by_category_from_detail(cur, geo_id: str, *, zone_by: str) -> list[dict]:
-    """Travel-reason chart rows for one zone from trips_route_emissions (or legacy detail)."""
+def _od10_zone_by_category_from_detail(cur, geo_id: str | list[str], *, zone_by: str) -> list[dict]:
+    """Travel-reason chart rows for one or more zones from trips_route_emissions (or legacy detail)."""
     detail = _od10_detail_table(cur)
     if not detail:
         return []
-    gid = str(geo_id or "").strip()
-    if not gid:
+    ids = _parse_geo_id_list(geo_id)
+    if not ids:
         return []
     mode = "dest" if (zone_by or "rules").strip().lower() == "dest" else "rules"
     zcol = _od10_zone_detail_column(cur, detail, zone_by=mode)
@@ -1739,18 +1779,18 @@ def _od10_zone_by_category_from_detail(cur, geo_id: str, *, zone_by: str) -> lis
         GROUP BY 1
         ORDER BY 2 DESC NULLS LAST
         """,
-        (gid,),
+        (ids,),
     )
     return _od10_category_rows_from_query(cur, cur.fetchall())
 
 
-def _od10_zone_by_category_from_routes(cur, geo_id: str, *, zone_by: str) -> list[dict]:
-    """Travel-reason chart rows for one zone from trip_routes table."""
+def _od10_zone_by_category_from_routes(cur, geo_id: str | list[str], *, zone_by: str) -> list[dict]:
+    """Travel-reason chart rows for one or more zones from trip_routes table."""
     routes_t = _resolve_od10_routes_table(cur)
     if not routes_t:
         return []
-    gid = str(geo_id or "").strip()
-    if not gid:
+    ids = _parse_geo_id_list(geo_id)
+    if not ids:
         return []
     mode = "dest" if (zone_by or "rules").strip().lower() == "dest" else "rules"
     if mode == "dest":
@@ -1790,12 +1830,12 @@ def _od10_zone_by_category_from_routes(cur, geo_id: str, *, zone_by: str) -> lis
         GROUP BY 1
         ORDER BY 2 DESC NULLS LAST
         """,
-        (gid,),
+        (ids,),
     )
     return _od10_category_rows_from_query(cur, cur.fetchall())
 
 
-def _od10_zone_by_category(cur, geo_id: str, *, zone_by: str, zone_stats: dict | None) -> list[dict]:
+def _od10_zone_by_category(cur, geo_id: str | list[str], *, zone_by: str, zone_stats: dict | None) -> list[dict]:
     by_category = _od10_zone_by_category_from_detail(cur, geo_id, zone_by=zone_by)
     if not _od10_zone_by_category_is_usable(by_category):
         by_category = _od10_zone_by_category_from_routes(cur, geo_id, zone_by=zone_by)
@@ -1806,29 +1846,42 @@ def _od10_zone_by_category(cur, geo_id: str, *, zone_by: str, zone_stats: dict |
     return by_category
 
 
+def _od10_zone_selection_label(geo_ids: list[str], zone_codes: dict, zone_names: dict) -> str:
+    if not geo_ids:
+        return ""
+    if len(geo_ids) > 1:
+        return f"{len(geo_ids)} zones"
+    geo_id = geo_ids[0]
+    label = zone_codes.get(geo_id) or zone_names.get(geo_id) or geo_id
+    if label and label != geo_id and zone_names.get(geo_id):
+        return f"{zone_names.get(geo_id)} – {zone_codes.get(geo_id, geo_id)}"
+    if zone_names.get(geo_id) and zone_codes.get(geo_id):
+        return f"{zone_names.get(geo_id)} – {zone_codes.get(geo_id)}"
+    return label
+
+
 @app.route("/api/od/zone_sidebar")
 @app.route("/api/od/zone_bootstrap")
 @_od10_api_errors
 def api_od10_zone_bootstrap():
-    geo_id = (request.args.get("geo_id") or request.args.get("dest_geo_id") or "").strip()
-    if not geo_id:
+    geo_ids = _request_geo_ids("geo_id", "geo_ids", "dest_geo_id", "dest_geo_ids")
+    if not geo_ids:
         return jsonify({"error": "geo_id is required"}), 400
+    geo_id = geo_ids[0]
     zone_by = (request.args.get("zone_by") or request.args.get("attribution") or "rules").strip().lower()
     if zone_by not in ("rules", "dest"):
         zone_by = "rules"
     conn = get_conn()
     try:
         cur = conn.cursor()
-        stats = _od10_single_zone_stats(cur, geo_id, zone_by=zone_by)
-        by_category = _od10_zone_by_category(cur, geo_id, zone_by=zone_by, zone_stats=stats)
+        stats = _od10_single_zone_stats(cur, geo_ids, zone_by=zone_by)
+        by_category = _od10_zone_by_category(cur, geo_ids, zone_by=zone_by, zone_stats=stats)
         zone_codes, zone_names = _zone_code_maps_for_geom(cur)
-        label = zone_codes.get(geo_id) or zone_names.get(geo_id) or geo_id
-        if label and label != geo_id and zone_names.get(geo_id):
-            label = f"{zone_names.get(geo_id)} – {zone_codes.get(geo_id, geo_id)}"
-        elif zone_names.get(geo_id) and zone_codes.get(geo_id):
-            label = f"{zone_names.get(geo_id)} – {zone_codes.get(geo_id)}"
+        label = _od10_zone_selection_label(geo_ids, zone_codes, zone_names)
         return jsonify({
             "geo_id": geo_id,
+            "geo_ids": geo_ids,
+            "zone_count": len(geo_ids),
             "zone_by": zone_by,
             "zone_label": label,
             "stats": stats,
@@ -1905,8 +1958,10 @@ def _od10_incoming_payload_from_rows(
     ]
     inc_km = float(trow[2] or 0) if trow and len(trow) > 2 and trow[2] is not None else 0.0
     weighted = _od10_metrics_weighted()
+    dest_ids = _parse_geo_id_list(dest_id)
     return {
         "dest_geo_id": dest_id,
+        "dest_geo_ids": dest_ids or [dest_id],
         "dest_zone_code": _zone_code_for(dest_id),
         "dest_zone_name": _zone_name_for(dest_id),
         "dest_zone_short_name": _zone_short_name_for(dest_id),
@@ -2100,12 +2155,16 @@ def _footprint_features_from_inventory_rows(
 def _zone_building_fabric_features(
     cur,
     *,
-    zone_geo_id: str,
+    zone_geo_id: str | list[str],
     geom_sql: str,
     inventory_by_id: dict[str, dict],
     row_limit: int,
 ) -> tuple[list[dict], bool]:
-    """Footprint polygons in a zone; inventory buildings first, then others up to row_limit."""
+    """Footprint polygons in one or more zones; inventory buildings first, then others up to row_limit."""
+    zone_ids = _parse_geo_id_list(zone_geo_id)
+    if not zone_ids:
+        return [], False
+    zone_sql, zone_params = _zone_geo_id_pred("b.zone_geo_id", zone_ids)
     inv_ids = [str(bid).strip() for bid in inventory_by_id.keys() if bid]
     features: list[dict] = []
     seen: set[str] = set()
@@ -2144,11 +2203,11 @@ def _zone_building_fabric_features(
                    {geom_sql} AS geom_json
             FROM {SCHEMA}.{BUILDINGS_TABLE} AS b
             WHERE b.geometry IS NOT NULL
-              AND split_part(trim(b.zone_geo_id::text), '.', 1) = %s
+              AND {zone_sql}
               AND b.id::text = ANY(%s)
             ORDER BY b.id::text
             """,
-            (zone_geo_id, inv_ids),
+            (*zone_params, inv_ids),
         )
         for r in cur.fetchall():
             if len(features) >= row_limit:
@@ -2166,12 +2225,12 @@ def _zone_building_fabric_features(
                        {geom_sql} AS geom_json
                 FROM {SCHEMA}.{BUILDINGS_TABLE} AS b
                 WHERE b.geometry IS NOT NULL
-                  AND split_part(trim(b.zone_geo_id::text), '.', 1) = %s
+                  AND {zone_sql}
                   AND NOT (b.id::text = ANY(%s))
                 ORDER BY b.id::text
                 LIMIT %s
                 """,
-                (zone_geo_id, exclude, remaining + 1),
+                (*zone_params, exclude, remaining + 1),
             )
         else:
             cur.execute(
@@ -2181,11 +2240,11 @@ def _zone_building_fabric_features(
                        {geom_sql} AS geom_json
                 FROM {SCHEMA}.{BUILDINGS_TABLE} AS b
                 WHERE b.geometry IS NOT NULL
-                  AND split_part(trim(b.zone_geo_id::text), '.', 1) = %s
+                  AND {zone_sql}
                 ORDER BY b.id::text
                 LIMIT %s
                 """,
-                (zone_geo_id, remaining + 1),
+                (*zone_params, remaining + 1),
             )
         extra = cur.fetchall()
         extra_truncated = len(extra) > remaining
@@ -2201,9 +2260,9 @@ def _zone_building_fabric_features(
         SELECT COUNT(*)::bigint
         FROM {SCHEMA}.{BUILDINGS_TABLE} AS b
         WHERE b.geometry IS NOT NULL
-          AND split_part(trim(b.zone_geo_id::text), '.', 1) = %s
+          AND {zone_sql}
         """,
-        (zone_geo_id,),
+        zone_params,
     )
     zone_total = int((cur.fetchone() or [0])[0] or 0)
     truncated = zone_total > row_limit or extra_truncated or len(inv_ids) > row_limit
@@ -2213,9 +2272,10 @@ def _zone_building_fabric_features(
 @app.route("/api/od/zone_building_fabric")
 def api_od10_zone_building_fabric():
     """All building footprint polygons in a zone (independent of emissions filter)."""
-    zone_geo_id = (request.args.get("zone_geo_id") or "").strip()
-    if not zone_geo_id:
+    zone_ids = _request_geo_ids("zone_geo_id", "zone_geo_ids")
+    if not zone_ids:
         return jsonify({"error": "zone_geo_id_required"}), 400
+    zone_geo_id = ",".join(zone_ids)
     try:
         row_limit = int(request.args.get("limit", "50000") or "50000")
     except Exception:
@@ -2233,7 +2293,8 @@ def api_od10_zone_building_fabric():
             row_limit=row_limit,
         )
         return jsonify({
-            "zone_geo_id": zone_geo_id,
+            "zone_geo_id": zone_ids[0],
+            "zone_geo_ids": zone_ids,
             "fabric_truncated": truncated,
             "limit": row_limit,
             "footprint_fc": {"type": "FeatureCollection", "features": features},
@@ -2263,7 +2324,8 @@ def api_od10_building_map():
         row_limit = 50000
     row_limit = max(100, min(row_limit, 500000))
     grid_cell_deg = _parse_building_grid_cell_deg(request.args.get("grid_cell_deg"))
-    zone_geo_id = (request.args.get("zone_geo_id") or "").strip()
+    zone_ids = _request_geo_ids("zone_geo_id", "zone_geo_ids")
+    zone_geo_id = ",".join(zone_ids)
     building_by = _normalize_building_by(request.args.get("building_by") or "rules")
     island_only = _request_island_only(default=True)
 
@@ -2285,13 +2347,13 @@ def api_od10_building_map():
         buildings_rel = BUILDINGS_TABLE
         lat_sql = _building_map_lat_sql("b")
         lon_sql = _building_map_lon_sql("b")
-        include_footprints = _request_include_footprints(default=bool(zone_geo_id))
+        include_footprints = _request_include_footprints(default=bool(zone_ids))
         geom_sql = _building_footprint_geojson_sql("b") if include_footprints else "NULL::text"
-        zone_pred, zone_params = _building_zone_filter_sql(cur, lat_sql, lon_sql, zone_geo_id)
+        zone_pred, zone_params = _building_zone_filter_sql(cur, lat_sql, lon_sql, zone_ids)
         agg_sql = _od10_building_agg_subquery(cur, detail_tab, building_by, min_g)
         source_table = building_tab or detail_tab
 
-        if not zone_geo_id:
+        if not zone_ids:
             cur.close()
             return jsonify({
                 "buildings": [],
@@ -2359,7 +2421,8 @@ def api_od10_building_map():
                 "source_table": source_table,
                 "truncated": truncated,
                 "limit": row_limit,
-                "zone_geo_id": zone_geo_id,
+                "zone_geo_id": zone_ids[0] if zone_ids else None,
+                "zone_geo_ids": zone_ids or None,
                 "grid_cell_deg": cell,
                 "metrics_mode": "legs",
             })
@@ -2377,7 +2440,9 @@ def api_od10_building_map():
             )
             w_sql = _od10_building_capacity_weight_sql(cur, b="b", j="j")
             emax_sql = ""
-            pop_params: list = [zone_geo_id, zone_geo_id]
+            zcol_sql, zcol_params = _zone_geo_id_pred(zcol, zone_ids)
+            bzone_sql, bzone_params = _zone_geo_id_pred("b.zone_geo_id", zone_ids)
+            pop_params: list = list(zcol_params) + list(bzone_params)
             if max_g is not None and max_g >= min_g:
                 emax_sql = " AND disp_emissions_g <= %s"
                 pop_params.append(max_g)
@@ -2393,7 +2458,7 @@ def api_od10_building_map():
                          COALESCE(SUM(distance_m), 0)::double precision / 1000.0 AS d_exp
                   FROM {SCHEMA}.{detail_tab}
                   WHERE {island_sql}
-                    AND split_part(trim({zcol}::text), '.', 1) = %s
+                    AND {zcol_sql}
                 ),
                 agg AS (
                   SELECT {bid}::text AS building_id,
@@ -2417,7 +2482,7 @@ def api_od10_building_map():
                   FROM {SCHEMA}.{buildings_rel} b
                   {jobs_join}
                   WHERE b.geometry IS NOT NULL
-                    AND split_part(trim(b.zone_geo_id::text), '.', 1) = %s
+                    AND {bzone_sql}
                 ),
                 weighted AS (
                   SELECT b.*,
@@ -2456,7 +2521,8 @@ def api_od10_building_map():
             if not building_tab:
                 raise ValueError("building_map requires building_emissions table when population alloc is off")
             trips_c, tw_c, em_c, dist_c = _od10_building_metric_cols(cur, building_tab, building_by)
-            legs_params: list = [zone_geo_id]
+            bzone_sql, bzone_params = _zone_geo_id_pred("b.zone_geo_id", zone_ids)
+            legs_params: list = list(bzone_params)
             emax_legs = ""
             if max_g is not None and max_g >= min_g:
                 emax_legs = " AND COALESCE(e.emissions_g, 0) <= %s"
@@ -2486,7 +2552,7 @@ def api_od10_building_map():
                     FROM {SCHEMA}.{buildings_rel} AS b
                     LEFT JOIN {SCHEMA}.{building_tab} AS e ON e.building_id = b.id::text
                     WHERE b.geometry IS NOT NULL
-                      AND split_part(trim(b.zone_geo_id::text), '.', 1) = %s
+                      AND {bzone_sql}
                       AND COALESCE(e.{em_c}, 0) >= %s{emax_legs}
                     ORDER BY COALESCE(e.{em_c}, 0) DESC, b.id::text
                     LIMIT %s
@@ -2541,7 +2607,7 @@ def api_od10_building_map():
                     FROM {SCHEMA}.{buildings_rel} AS b
                     LEFT JOIN touch AS t ON t.building_id = b.id::text
                     WHERE b.geometry IS NOT NULL
-                      AND split_part(trim(b.zone_geo_id::text), '.', 1) = %s
+                      AND {bzone_sql}
                       AND COALESCE(t.emissions_g, 0) >= %s{emax_legs}
                     ORDER BY COALESCE(t.emissions_g, 0) DESC, b.id::text
                     LIMIT %s
@@ -2577,10 +2643,10 @@ def api_od10_building_map():
         inventory_by_id = {str(b["building_id"]): b for b in out}
         fabric_truncated = False
         footprint_features: list[dict] = []
-        if include_footprints and zone_geo_id:
+        if include_footprints and zone_ids:
             footprint_features, fabric_truncated = _zone_building_fabric_features(
                 cur,
-                zone_geo_id=zone_geo_id,
+                zone_geo_id=zone_ids,
                 geom_sql=geom_sql,
                 inventory_by_id=inventory_by_id,
                 row_limit=row_limit,
@@ -2594,7 +2660,8 @@ def api_od10_building_map():
             "truncated": truncated,
             "fabric_truncated": fabric_truncated,
             "limit": row_limit,
-            "zone_geo_id": zone_geo_id or None,
+            "zone_geo_id": zone_ids[0] if zone_ids else None,
+            "zone_geo_ids": zone_ids or None,
             "point_source": "footprint",
             "metrics_mode": metrics_mode,
             "population_alloc": _od10_building_population_alloc_enabled(),
@@ -2755,10 +2822,105 @@ def api_od10_flows_zones():
         return api_od10_zone_map()
 
 
+def _od10_merge_incoming_payloads(dest_ids: list[str], payloads: list[dict]) -> dict:
+    """Treat selected dests as one region: merge origins, drop intra-selection flows."""
+    dest_set = set(dest_ids)
+    by_orig: dict[str, dict] = {}
+    lats: list[float] = []
+    lons: list[float] = []
+    zone_trips = zone_emis = zone_km = 0.0
+    base: dict | None = None
+    for p in payloads:
+        if not p:
+            continue
+        if base is None:
+            base = dict(p)
+        dlat = p.get("dest_lat")
+        dlon = p.get("dest_lon")
+        if dlat is not None:
+            try:
+                lats.append(float(dlat))
+            except (TypeError, ValueError):
+                pass
+        if dlon is not None:
+            try:
+                lons.append(float(dlon))
+            except (TypeError, ValueError):
+                pass
+        zone_trips += float(p.get("dest_zone_trips") or p.get("dest_rules_trips") or 0)
+        zone_emis += float(p.get("dest_zone_emissions_g") or p.get("dest_rules_emissions_g") or 0)
+        zone_km += float(p.get("dest_zone_distance_km") or 0)
+        for f in p.get("flows") or []:
+            oid = str(f.get("orig_geo_id") or "").strip()
+            if not oid or oid in dest_set:
+                continue
+            acc = by_orig.get(oid)
+            if acc is None:
+                acc = dict(f)
+                acc["trips"] = 0.0
+                acc["total_emissions_g"] = 0.0
+                acc["total_distance_km"] = 0.0
+                by_orig[oid] = acc
+            acc["trips"] += float(f.get("trips") or 0)
+            acc["total_emissions_g"] += float(f.get("total_emissions_g") or 0)
+            acc["total_distance_km"] += float(f.get("total_distance_km") or 0)
+            if acc.get("orig_lat") is None and f.get("orig_lat") is not None:
+                acc["orig_lat"] = f.get("orig_lat")
+            if acc.get("orig_lon") is None and f.get("orig_lon") is not None:
+                acc["orig_lon"] = f.get("orig_lon")
+    dest_lat = (sum(lats) / len(lats)) if lats else None
+    dest_lon = (sum(lons) / len(lons)) if lons else None
+    flows = sorted(by_orig.values(), key=lambda x: -float(x.get("total_emissions_g") or 0))
+    for f in flows:
+        f["dest_lat"] = dest_lat
+        f["dest_lon"] = dest_lon
+    ext_trips = sum(float(f.get("trips") or 0) for f in flows)
+    ext_emis = sum(float(f.get("total_emissions_g") or 0) for f in flows)
+    ext_km = sum(float(f.get("total_distance_km") or 0) for f in flows)
+    out = base or {}
+    out["dest_geo_id"] = dest_ids[0]
+    out["dest_geo_ids"] = dest_ids
+    out["dest_lat"] = dest_lat
+    out["dest_lon"] = dest_lon
+    out["total_incoming_trips"] = ext_trips
+    out["total_incoming_emissions_g"] = ext_emis
+    out["total_incoming_distance_km"] = round(ext_km, 2)
+    out["origin_zone_count"] = len(flows)
+    out["flow_count"] = len(flows)
+    out["flows"] = flows
+    out["dest_zone_trips"] = zone_trips
+    out["dest_zone_emissions_g"] = zone_emis
+    out["dest_zone_distance_km"] = zone_km
+    out["dest_rules_trips"] = zone_trips
+    out["dest_rules_emissions_g"] = zone_emis
+    if len(dest_ids) > 1:
+        out["dest_zone_label"] = f"{len(dest_ids)} zones"
+        out["zone_label"] = f"{len(dest_ids)} zones"
+    intra_trips = max(0.0, zone_trips - ext_trips)
+    intra_emis = max(0.0, zone_emis - ext_emis)
+    intra_km = max(0.0, zone_km - ext_km)
+    if intra_trips > 0 or intra_emis > 0:
+        out["intra_zone"] = {
+            "orig_geo_id": dest_ids[0],
+            "dest_geo_id": dest_ids[0],
+            "is_intra_zone": True,
+            "trips": intra_trips,
+            "total_emissions_g": intra_emis,
+            "total_distance_km": round(intra_km, 2),
+            "orig_lat": dest_lat,
+            "orig_lon": dest_lon,
+            "dest_lat": dest_lat,
+            "dest_lon": dest_lon,
+        }
+    else:
+        out["intra_zone"] = None
+    return out
+
+
 @app.route("/api/od/zone_incoming_flow")
 def api_od10_zone_incoming_flow():
-    dest_id = (request.args.get("dest_geo_id", "") or "").strip()
-    if not dest_id:
+    dest_ids = _request_geo_ids("dest_geo_id", "dest_geo_ids")
+    if not dest_ids:
         return jsonify({"error": "dest_geo_id is required"}), 400
     zone_by = (request.args.get("zone_by", "rules") or "rules").strip().lower()
     if zone_by == "meeting":
@@ -2766,6 +2928,23 @@ def api_od10_zone_incoming_flow():
     if zone_by not in ("rules", "dest"):
         zone_by = "rules"
     limit = _parse_od10_flow_limit(request.args.get("limit"), default=10)
+    if len(dest_ids) > 1:
+        payloads = []
+        for did in dest_ids:
+            q = urlencode({
+                "dest_geo_id": did,
+                "zone_by": zone_by,
+                "limit": "all" if limit is None else str(limit),
+            })
+            with app.test_request_context(f"/api/od/zone_incoming_flow?{q}", method="GET"):
+                resp = api_od10_zone_incoming_flow()
+            if isinstance(resp, tuple):
+                resp = resp[0]
+            data = json.loads(resp.get_data(as_text=True) or "{}")
+            if data and not data.get("error"):
+                payloads.append(data)
+        return jsonify(_od10_merge_incoming_payloads(dest_ids, payloads))
+    dest_id = dest_ids[0]
 
     conn = get_conn()
     try:

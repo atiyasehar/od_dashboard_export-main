@@ -30,5 +30,4 @@ _boot_test.json
 _tmp_check.js
 _tmp_*
 
-# Local exports / scratch
-data/export/
+data/cache/

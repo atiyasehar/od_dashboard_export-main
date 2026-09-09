@@ -418,7 +418,7 @@ Restart after changing the setting. The start scripts (`start_dashboard.ps1` / `
 |--|------------------|-------------------------------|
 | **Leaflet / Chart.js** | Loaded from unpkg / jsDelivr CDN | Bundled in `dashboard/assets/vendor/` |
 | **Fonts** | Google Fonts (DM Sans, Outfit) | System UI fonts |
-| **Map basemap** | Carto/OSM raster tiles | Dark grid background (no tile requests) |
+| **Map basemap** | OpenStreetMap raster tiles (dimmed) | Dark grid background (no tile requests) |
 | **Zone / building / flow layers** | Yes | Yes (same API data from PostgreSQL) |
 | **Charts (dashboard, buildings)** | Yes | Yes |
 | **Internet required for UI** | Yes (after first load, tiles refresh) | No |
@@ -432,7 +432,7 @@ When offline is on, `run_dashboard.py`:
 1. Rewrites HTML responses to swap CDN URLs for local vendor files.
 2. Strips Google Fonts `<link>` tags and injects `dashboard/assets/dashboard-offline.css`.
 3. Injects `offline: true` into the runtime deploy config (`__dashDeploy` / `/api/health`).
-4. Map pages call `DashMapBasemap.addTo()` which skips Carto tiles when offline.
+4. Map pages call `DashMapBasemap.addTo()` which skips street tiles when offline.
 
 Bundled vendor files (included in the repo and in pack bundles):
 
@@ -463,7 +463,7 @@ Expected: `"offline": true`.
 
 **3. Browser** — open a map page, hard refresh (Ctrl+Shift+R), then check DevTools → Network:
 
-- No requests to `unpkg.com`, `cdn.jsdelivr.net`, `fonts.googleapis.com`, or `basemaps.cartocdn.com`
+- No requests to `unpkg.com`, `cdn.jsdelivr.net`, `fonts.googleapis.com`, or `tile.openstreetmap.org`
 - Scripts load from `/assets/vendor/...` on your server
 - Map canvas shows a dark grid; zones and buildings still appear when selected
 
@@ -473,7 +473,7 @@ Expected: `"offline": true`.
 
 Keep the default (`DASH_OFFLINE` unset or `false`) if you want:
 
-- Street-style Carto basemap tiles
+- Street-style OpenStreetMap basemap tiles
 - Google Fonts typography matching the design preview
 
 Online mode is fine for most local development and deployments with normal internet access.
@@ -555,7 +555,7 @@ Update `manifest.json` `created_at` after re-dumping.
 | Building CO₂ shows 0 | Old dump or wrong table | Health → `building_emissions.rows` ≈ 924757 |
 | UI looks outdated | Browser cache | Hard refresh (Ctrl+Shift+R) |
 | `Address already in use` | Another process on your `PORT` | Change `PORT` in `deploy.env` or stop the other process |
-| Blank map background | Offline mode or no network | Expected with `DASH_OFFLINE=true`; zones/buildings still render. Online mode needs Carto tile access |
+| Blank map background | Offline mode or no network | Expected with `DASH_OFFLINE=true`; zones/buildings still render. Online mode needs OpenStreetMap tile access |
 | Leaflet/Chart failed to load | CDN blocked, offline not enabled | Set `DASH_OFFLINE=true` in `deploy.env` and restart |
 | Opened HTML as `file://` | Not using Flask | Use `http://127.0.0.1:<PORT>/...` |
 

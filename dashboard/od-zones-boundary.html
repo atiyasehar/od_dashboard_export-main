@@ -187,10 +187,11 @@
 
   <script src="assets/dashboard-config.js?v=3"></script>
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-  <script src="assets/dashboard-map-basemap.js"></script>
+  <script src="assets/dashboard-map-basemap.js?v=14"></script>
+  <script src="assets/dashboard-map-transit.js?v=5"></script>
   <script src="assets/loading-overlay.js?v=11"></script>
   <script src="assets/dashboard-nav.js?v=17"></script>
-  <script src="assets/dashboard-zone-ui.js?v=20"></script>
+  <script src="assets/dashboard-zone-ui.js?v=22"></script>
   <script>
   (function () {
     function zoneCt(geoId, meta) {
@@ -222,6 +223,7 @@
 
     var map = L.map('map', { zoomControl: true, preferCanvas: true });
     DashMapBasemap.addTo(map, 'dark_all', { maxZoom: 19 });
+    if (window.DashMapTransit) DashMapTransit.attach(map);
 
     var boundaryLayer = null;
     var islandLayer = null;

@@ -189,6 +189,7 @@ Two attribution modes (toolbar buttons):
 3. **Click a zone** on the map to select it. Selected zones are highlighted.
 4. Use the emission filter (minimum kg CO₂) if available to thin low-emission zones.
 5. From a selected zone you can jump to **Flows** or **Buildings** for that zone (links or navigation preserve the zone).
+6. Use **Transit overlay** (bottom-left of the map) to show STM metro, REM, exo trains, and STM buses. Hover station pins for names. Bus stops appear after you zoom in.
 
 Map tabs may include multiple choropleth variants (e.g. emissions intensity, trip counts). Use the map tab row above the map canvas.
 

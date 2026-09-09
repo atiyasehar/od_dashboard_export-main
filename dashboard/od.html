@@ -16,7 +16,8 @@
   <script src="assets/dashboard-embed.js?v=1"></script>
   <script src="assets/loading-overlay.js?v=11"></script>
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-  <script src="assets/dashboard-map-basemap.js"></script>
+  <script src="assets/dashboard-map-basemap.js?v=14"></script>
+  <script src="assets/dashboard-map-transit.js?v=5"></script>
   <script src="https://cdn.jsdelivr.net/npm/leaflet.heat@0.2.0/dist/leaflet-heat.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.2.0"></script>
@@ -190,6 +191,17 @@
       float: right; background: none; border: 0; color: var(--muted);
       font-size: 1.25rem; line-height: 1; cursor: pointer; padding: 0 0.25rem;
     }
+    .zone-sel-chips { display: flex; flex-wrap: wrap; gap: 0.35rem; margin: 0.35rem 0 0.55rem; }
+    .zone-sel-chip {
+      display: inline-flex; align-items: center; gap: 0.2rem;
+      border: 1px solid var(--border); border-radius: 999px;
+      padding: 0.12rem 0.35rem 0.12rem 0.5rem;
+      font-size: 0.72rem; color: var(--text); background: rgba(94, 234, 212, 0.1);
+    }
+    .zone-sel-chip button {
+      background: none; border: 0; color: var(--muted); cursor: pointer;
+      font-size: 0.95rem; line-height: 1; padding: 0 0.15rem;
+    }
     .zone-map-label-wrap {
       background: transparent;
       border: none;
@@ -349,6 +361,7 @@
           <button type="button" class="close-x" id="closeZonePanel" aria-label="Close">&times;</button>
           <h4 id="zonePanelTitle">Zone</h4>
           <div class="sub" id="zonePanelSub"></div>
+          <div class="zone-sel-chips" id="zoneSelChips"></div>
           <dl class="zone-kv" id="zonePanelBody"></dl>
           <button type="button" class="btn" id="viewIncomingFlows" style="margin-top:0.75rem;width:100%">View incoming flows</button>
         </div>
@@ -358,7 +371,7 @@
 
   <script src="assets/dashboard-nav.js?v=17"></script>
   <script src="assets/dashboard-config.js?v=3"></script>
-  <script src="assets/dashboard-zone-ui.js?v=20"></script>
+  <script src="assets/dashboard-zone-ui.js?v=22"></script>
   <script>
     const IS_EMBED = !!(window.DashEmbed && DashEmbed.isEmbed);
 
@@ -401,8 +414,25 @@
     let zoneEmissionScale = { minG: 0, maxG: 1 };
     let bootCache = null;
     let selectedZoneId = null;
+    let selectedZoneIds = [];
     let selectedZoneBy = null;
     let selectedZoneByCategory = null;
+
+    function selectedZoneIdList() {
+      if (selectedZoneIds && selectedZoneIds.length) return selectedZoneIds;
+      return selectedZoneId ? [String(selectedZoneId)] : [];
+    }
+    function isSelectedZone(gid) {
+      const id = String(gid == null ? '' : gid);
+      return id && selectedZoneIdList().indexOf(id) >= 0;
+    }
+    function setSelectedZoneIds(ids, zoneBy) {
+      selectedZoneIds = (window.DashZoneUi && DashZoneUi.parseGeoIdList)
+        ? DashZoneUi.parseGeoIdList(ids)
+        : (ids || []).map(String).filter(Boolean);
+      selectedZoneId = selectedZoneIds[0] || null;
+      selectedZoneBy = selectedZoneIds.length ? (zoneBy === 'dest' ? 'dest' : 'rules') : null;
+    }
 
     function activeViewKey() {
       if (window.DashNav && DashNav.readAttribution('rules') === 'dest') return 'dest';
@@ -850,9 +880,11 @@
       const v = mapViews[viewKey];
       if (!v || !v.map) return;
       disposeZoneLabelLayer(viewKey);
-      const highlight = selectedZoneId != null && selectedZoneBy === v.zoneBy;
+      const highlight = selectedZoneIdList().length && selectedZoneBy === v.zoneBy;
       if (!highlight) return;
-      const selId = String(selectedZoneId);
+      const ids = selectedZoneIdList();
+      if (ids.length !== 1) return;
+      const selId = ids[0];
       const row = findZoneRow(selId, payload) || {};
       const label = zoneCt(selId, row);
       if (!label) return;
@@ -888,17 +920,20 @@
       if (!p) return '';
       return String(p.geo_id != null ? p.geo_id : '');
     }
-    function addSelectedZoneOutline(viewKey, fc, selId) {
+    function addSelectedZoneOutline(viewKey, fc, selIds) {
       const v = mapViews[viewKey];
-      if (!v || !v.map || !selId || !fc || !fc.features) return;
+      const ids = (selIds || []).map(String).filter(Boolean);
+      if (!v || !v.map || !ids.length || !fc || !fc.features) return;
       disposeZoneOutlineLayer(viewKey);
-      const selFeat = fc.features.find((f) => zoneFeatureGeoId(f) === String(selId));
-      if (!selFeat) return;
+      const selFeats = fc.features.filter((f) => ids.indexOf(zoneFeatureGeoId(f)) >= 0);
+      if (!selFeats.length) return;
       if (!v.map.getPane('zoneOutlinePane')) {
         v.map.createPane('zoneOutlinePane');
         v.map.getPane('zoneOutlinePane').style.zIndex = 640;
       }
-      v.zoneOutlineLayer = L.geoJSON(selFeat, {
+      v.zoneOutlineLayer = L.geoJSON(
+        selFeats.length === 1 ? selFeats[0] : { type: 'FeatureCollection', features: selFeats },
+        {
         pane: 'zoneOutlinePane',
         interactive: false,
         style: {
@@ -931,8 +966,8 @@
       zones.forEach(z => { if (z && z.geo_id != null) zonesById[String(z.geo_id)] = z; });
       const zoneDistById = (payload && payload.zoneDistById) ? payload.zoneDistById : {};
       const fc = payload && payload.geojson;
-      const highlight = selectedZoneId != null && selectedZoneBy === v.zoneBy;
-      const selId = highlight ? String(selectedZoneId) : '';
+      const highlight = selectedZoneIdList().length && selectedZoneBy === v.zoneBy;
+      const selIds = highlight ? selectedZoneIdList() : [];
       if (fc && fc.features && fc.features.length) {
         v.zoneLayer = L.geoJSON(fc, {
           pane: 'zonePane',
@@ -940,7 +975,7 @@
           style(feature) {
             const p = feature.properties;
             const g = (p && p.total_emissions_g) || 0;
-            const isSel = highlight && p && selId && String(p.geo_id) === selId;
+            const isSel = highlight && p && selIds.indexOf(String(p.geo_id)) >= 0;
             const noTrips = !zoneHasTripActivity(p);
             return {
               fillColor: zoneChoroplethFill(p),
@@ -955,18 +990,18 @@
             const tip = window.DashZoneUi
               ? DashZoneUi.zoneTooltipHtml(p.geo_id, p, zonesById, zoneDistById)
               : ('<div style="font-size:11px"><strong>Zone ' + String(p.geo_id) + '</strong></div>');
-            layer.bindTooltip(tip + '<br><span style="color:#8b9cb8">Click for zone details</span>', { direction: 'top', opacity: 1 });
+            layer.bindTooltip(tip + '<br><span style="color:#8b9cb8">Click to select · Ctrl/Cmd+click to add</span>', { direction: 'top', opacity: 1 });
             bindZoneSelectClick(layer, p.geo_id, v.zoneBy);
           },
         }).addTo(v.map);
-        if (highlight && selId) addSelectedZoneOutline(viewKey, fc, selId);
+        if (highlight && selIds.length) addSelectedZoneOutline(viewKey, fc, selIds);
         renderSelectedZoneLabel(viewKey, payload);
         return;
       }
       v.zoneLayer = L.layerGroup({ pane: 'zonePane' }).addTo(v.map);
       zones.forEach(z => {
         const zid = String(z.geo_id);
-        const isSel = highlight && selId === zid;
+        const isSel = highlight && selIds.indexOf(zid) >= 0;
         const m = L.circleMarker([z.lat, z.lon], {
           radius: zoneRadiusPx(z), stroke: true, weight: 2,
           color: isSel ? '#5eead4' : '#166534',
@@ -975,7 +1010,7 @@
         const tip = window.DashZoneUi
           ? DashZoneUi.zoneTooltipHtml(zid, z, zonesById, zoneDistById)
           : ('<div style="font-size:11px"><strong>Zone ' + zid + '</strong></div>');
-        m.bindTooltip(tip + '<br><span style="color:#8b9cb8">Click for zone details</span>', { direction: 'top', opacity: 1 });
+        m.bindTooltip(tip + '<br><span style="color:#8b9cb8">Click to select · Ctrl/Cmd+click to add</span>', { direction: 'top', opacity: 1 });
         bindZoneSelectClick(m, z.geo_id, v.zoneBy);
         m._zoneGeoId = z.geo_id;
         m.addTo(v.zoneLayer);
@@ -992,6 +1027,7 @@
       m.createPane('zonePane'); m.getPane('zonePane').style.zIndex = 430;
       m.createPane('zoneOutlinePane'); m.getPane('zoneOutlinePane').style.zIndex = 640;
       DashMapBasemap.addTo(m, 'light_all');
+      if (window.DashMapTransit) DashMapTransit.attach(m);
       m.fitBounds([[45.38, -74.0], [45.68, -73.35]], { animate: false });
       return { ...spec, map: m, zoneLayer: null, zoneLabelLayer: null, zoneOutlineLayer: null, heatLayer: null, boundaryLayer: null, zonesBoundaryLayer: null, payload: { zones: [], geojson: null } };
     }
@@ -1114,6 +1150,7 @@
         window.parent.postMessage({
           type: 'dash-open-flows',
           dest_geo_id: destGeoId != null && destGeoId !== '' ? String(destGeoId) : '',
+          dest_geo_ids: String(destGeoId || '').split(',').map(s => s.trim()).filter(Boolean),
           zone_by: zb,
         }, '*');
         return;
@@ -1129,44 +1166,94 @@
       window.location.href = home + (params.toString() ? '?' + params.toString() : '');
     }
 
-    function populateZonePanel(geoId, zoneBy) {
+    function populateZonePanel(ids, zoneBy) {
+      const list = (window.DashZoneUi && DashZoneUi.parseGeoIdList)
+        ? DashZoneUi.parseGeoIdList(ids)
+        : (Array.isArray(ids) ? ids : [String(ids || '')]).filter(Boolean);
       const viewKey = zoneBy === 'dest' ? 'dest' : 'rules';
       const payload = mapViews[viewKey] && mapViews[viewKey].payload;
-      const row = findZoneRow(geoId, payload) || {};
+      const rows = list.map((gid) => findZoneRow(gid, payload) || { geo_id: gid });
+      const agg = (window.DashZoneUi && DashZoneUi.aggregateZoneStats)
+        ? DashZoneUi.aggregateZoneStats(rows)
+        : rows[0] || {};
       const title = document.getElementById('zonePanelTitle');
       const sub = document.getElementById('zonePanelSub');
       const body = document.getElementById('zonePanelBody');
-      if (title) title.textContent = zoneCt(geoId, row);
+      const label = (window.DashZoneUi && DashZoneUi.selectionLabel)
+        ? DashZoneUi.selectionLabel(list, (gid) => zoneCt(gid, findZoneRow(gid, payload)))
+        : (list.length > 1 ? list.length + ' zones' : zoneCt(list[0], rows[0]));
+      if (title) title.textContent = label || 'Zone';
       if (sub) {
-        sub.textContent = zoneBy === 'dest'
+        const mode = zoneBy === 'dest'
           ? 'Destination zone · PM23 actual OD'
           : 'Rules-based attribution · PM23 actual OD';
+        sub.textContent = list.length > 1
+          ? mode + ' · aggregated · Ctrl/Cmd+click to add or remove'
+          : mode + ' · Ctrl/Cmd+click to add zones';
       }
       if (body) {
-        const kg = formatKgCo2e(row.total_emissions_g);
-        const trips = fmtPopTrips(row.trips_weighted || row.trips);
-        const km = row.total_distance_km != null ? formatNum(row.total_distance_km) + ' km' : '—';
+        const kg = formatKgCo2e(agg.total_emissions_g);
+        const trips = fmtPopTrips(agg.trips_weighted || agg.trips);
+        const km = agg.total_distance_km != null ? formatNum(agg.total_distance_km) + ' km' : '—';
         body.innerHTML =
           '<dt>CO₂ emissions</dt><dd>' + kg + ' kg CO₂e</dd>' +
           '<dt>Car trips</dt><dd>' + trips + '</dd>' +
           '<dt>Distance</dt><dd>' + km + '</dd>';
       }
+      if (window.DashZoneUi && DashZoneUi.renderSelectionChips) {
+        DashZoneUi.renderSelectionChips(
+          document.getElementById('zoneSelChips'),
+          list,
+          (gid) => zoneCt(gid, findZoneRow(gid, payload)),
+          (gid) => {
+            const next = list.filter((id) => id !== String(gid));
+            if (!next.length) clearZonePanel();
+            else {
+              setSelectedZoneIds(next, zoneBy);
+              populateZonePanel(next, zoneBy);
+              refreshActiveMapView();
+              notifyZoneSelection(next.join(','), zoneBy);
+            }
+          }
+        );
+      }
       const panel = document.getElementById('zonePanel');
       if (panel) panel.classList.add('open');
     }
 
-    function selectZoneForPanel(geoId, zoneBy) {
+    function selectZoneForPanel(geoId, zoneBy, ev) {
       if (geoId == null || geoId === '') return;
-      selectedZoneId = String(geoId);
-      selectedZoneBy = zoneBy === 'dest' ? 'dest' : 'rules';
-      populateZonePanel(selectedZoneId, selectedZoneBy);
+      const gid = String(geoId);
+      const zb = zoneBy === 'dest' ? 'dest' : 'rules';
+      const toggle = window.DashZoneUi && DashZoneUi.clickIsMultiToggle
+        ? DashZoneUi.clickIsMultiToggle(ev)
+        : false;
+      let next;
+      if (toggle && selectedZoneBy === zb) {
+        next = (window.DashZoneUi && DashZoneUi.toggleGeoId)
+          ? DashZoneUi.toggleGeoId(selectedZoneIdList(), gid)
+          : (isSelectedZone(gid)
+            ? selectedZoneIdList().filter((id) => id !== gid)
+            : selectedZoneIdList().concat([gid]));
+      } else {
+        next = [gid];
+      }
+      if (!next.length) {
+        clearZonePanel();
+        return;
+      }
+      setSelectedZoneIds(next, zb);
+      populateZonePanel(next, zb);
       refreshActiveMapView();
-      notifyZoneSelection(selectedZoneId, selectedZoneBy);
+      notifyZoneSelection(next.join(','), zb);
     }
 
     function clearZonePanel() {
       selectedZoneId = null;
+      selectedZoneIds = [];
       selectedZoneBy = null;
+      const chips = document.getElementById('zoneSelChips');
+      if (chips) chips.innerHTML = '';
       const panel = document.getElementById('zonePanel');
       if (panel) panel.classList.remove('open');
       refreshActiveMapView();
@@ -1177,7 +1264,7 @@
       if (!geoId) return;
       layer.on('click', (e) => {
         if (e && e.originalEvent) L.DomEvent.stopPropagation(e);
-        selectZoneForPanel(geoId, zoneBy);
+        selectZoneForPanel(geoId, zoneBy, e);
       });
     }
 
@@ -1318,33 +1405,42 @@
     }
 
     function notifyZoneSelection(geoId, zoneBy) {
-      const gid = String(geoId || '').trim();
+      const ids = (window.DashZoneUi && DashZoneUi.parseGeoIdList)
+        ? DashZoneUi.parseGeoIdList(geoId)
+        : String(geoId || '').split(',').map((s) => s.trim()).filter(Boolean);
+      const viewKey = zoneBy === 'dest' ? 'dest' : 'rules';
+      const payload = mapViews[viewKey] && mapViews[viewKey].payload;
       let stats = null;
       let zoneLabel = '';
-      if (gid) {
-        const viewKey = zoneBy === 'dest' ? 'dest' : 'rules';
-        const payload = mapViews[viewKey] && mapViews[viewKey].payload;
-        const row = findZoneRow(gid, payload) || {};
-        stats = zoneStatsFromRow(row, gid);
-        zoneLabel = zoneCt(gid, row);
+      if (ids.length) {
+        const rows = ids.map((gid) => zoneStatsFromRow(findZoneRow(gid, payload) || {}, gid));
+        stats = (window.DashZoneUi && DashZoneUi.aggregateZoneStats)
+          ? Object.assign({}, DashZoneUi.aggregateZoneStats(rows), { geo_ids: ids, kpi_scope: 'zone' })
+          : Object.assign({}, rows[0], { geo_ids: ids });
+        zoneLabel = (window.DashZoneUi && DashZoneUi.selectionLabel)
+          ? DashZoneUi.selectionLabel(ids, (gid) => zoneCt(gid, findZoneRow(gid, payload)))
+          : (ids.length > 1 ? ids.length + ' zones' : zoneCt(ids[0], findZoneRow(ids[0], payload)));
       }
       if (IS_EMBED && window.parent !== window) {
         window.parent.postMessage({
           type: 'dash-zone-select',
-          geo_id: gid,
+          geo_id: ids[0] || '',
+          geo_ids: ids,
           zone_by: zoneBy || 'rules',
-          clear: !gid,
+          clear: !ids.length,
           stats,
           zone_label: zoneLabel,
         }, '*');
         return;
       }
-      refreshSidebarForZone(geoId, zoneBy);
+      refreshSidebarForZone(ids.join(','), zoneBy);
     }
 
     async function refreshSidebarForZone(geoId, zoneBy) {
-      const gid = String(geoId || '').trim();
-      if (!gid) {
+      const ids = (window.DashZoneUi && DashZoneUi.parseGeoIdList)
+        ? DashZoneUi.parseGeoIdList(geoId)
+        : String(geoId || '').split(',').map((s) => s.trim()).filter(Boolean);
+      if (!ids.length) {
         selectedZoneByCategory = null;
         if (bootCache) {
           applyDualKpiStats(bootCache);
@@ -1358,14 +1454,19 @@
       const zb = zoneBy === 'dest' ? 'dest' : 'rules';
       const viewKey = zb === 'dest' ? 'dest' : 'rules';
       const payload = mapViews[viewKey] && mapViews[viewKey].payload;
-      const row = findZoneRow(gid, payload) || {};
-      const instantStats = zoneStatsFromRow(row, gid);
-      const zoneLabel = zoneCt(gid, row);
+      const rows = ids.map((gid) => zoneStatsFromRow(findZoneRow(gid, payload) || {}, gid));
+      const instantStats = (window.DashZoneUi && DashZoneUi.aggregateZoneStats)
+        ? DashZoneUi.aggregateZoneStats(rows)
+        : rows[0];
+      const zoneLabel = (window.DashZoneUi && DashZoneUi.selectionLabel)
+        ? DashZoneUi.selectionLabel(ids, (gid) => zoneCt(gid, findZoneRow(gid, payload)))
+        : (ids.length > 1 ? ids.length + ' zones' : zoneCt(ids[0], rows[0]));
       applyKpiBlock(zb, instantStats);
       applySidebarCharts(null, instantStats, zoneLabel);
       try {
         const data = await fetchJson(
-          '/api/od/zone_sidebar?geo_id=' + encodeURIComponent(gid) + '&zone_by=' + zb
+          '/api/od/zone_sidebar?geo_id=' + encodeURIComponent(ids[0]) +
+          '&geo_ids=' + encodeURIComponent(ids.join(',')) + '&zone_by=' + zb
         );
         if (data && data.stats) {
           applyKpiBlock(zb, data.stats);
@@ -1439,7 +1540,8 @@
         }
         document.getElementById('closeZonePanel').addEventListener('click', clearZonePanel);
         document.getElementById('viewIncomingFlows').addEventListener('click', () => {
-          if (selectedZoneId) navigateToOdFlows(selectedZoneId, selectedZoneBy);
+          const ids = selectedZoneIdList();
+          if (ids.length) navigateToOdFlows(ids.join(','), selectedZoneBy);
         });
         document.getElementById('applyCustomRange').addEventListener('click', async () => {
           activePresetId = '__custom';

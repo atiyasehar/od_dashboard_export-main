@@ -166,7 +166,12 @@
     var el = document.getElementById('kpi-trips');
     var subEl = document.getElementById('kpi-trips-sub');
 
-    if (labelEl) labelEl.textContent = stats.kpi_scope === 'zone' ? 'Car trips · zone' : 'Car trips';
+    if (labelEl) {
+      var n = stats.geo_ids && stats.geo_ids.length;
+      if (stats.kpi_scope === 'zone' && n > 1) labelEl.textContent = 'Car trips \u00b7 ' + n + ' zones';
+      else if (stats.kpi_scope === 'zone') labelEl.textContent = 'Car trips \u00b7 zone';
+      else labelEl.textContent = 'Car trips';
+    }
     if (el) el.textContent = formatTripsNum(expanded);
     if (subEl) {
       if (stats.zone_label) {
@@ -437,8 +442,17 @@
   }
 
   function loadZoneSidebar(geoId, zoneBy, instant) {
-    var gid = String(geoId || '').trim();
-    if (!gid) {
+    var ids = [];
+    if (window.DashZoneUi && DashZoneUi.parseGeoIdList) {
+      ids = DashZoneUi.parseGeoIdList(geoId);
+      if (instant && instant.geo_ids) {
+        ids = DashZoneUi.parseGeoIdList(instant.geo_ids);
+      }
+    } else {
+      var raw = String(geoId || '').trim();
+      if (raw) ids = raw.split(',').map(function (s) { return s.trim(); }).filter(Boolean);
+    }
+    if (!ids.length) {
       clearZoneSidebar();
       return Promise.resolve();
     }
@@ -446,28 +460,31 @@
     var instantStats = instant && instant.stats;
     var instantLabel = (instant && instant.zone_label) || '';
     if (instantStats) {
-      applyInstantZoneSidebar(instantStats, instantLabel, gid);
+      applyInstantZoneSidebar(instantStats, instantLabel, ids[0]);
     } else {
       setKpiLoading(true);
     }
     var q = new URLSearchParams({
-      geo_id: gid,
+      geo_id: ids[0],
+      geo_ids: ids.join(','),
       zone_by: zoneBy === 'dest' ? 'dest' : 'rules',
     });
     return fetchJson('/api/od/zone_sidebar?' + q.toString(), 60000).then(function (data) {
       if (seq !== zoneSidebarReq) return;
       var stats = null;
+      var label = (data && data.zone_label) || instantLabel || ids[0];
       if (data && data.stats) {
         stats = Object.assign({}, data.stats, {
-          zone_label: data.zone_label || data.geo_id || gid,
+          zone_label: label,
           kpi_scope: 'zone',
+          geo_ids: (data && data.geo_ids) || ids,
         });
         applyKpiStats(stats, activeView);
       }
       applySidebarCharts(
         data && data.by_category,
         stats || instantStats || (data && data.stats),
-        (data && data.zone_label) || instantLabel || gid
+        label
       );
     }).catch(function (err) {
       if (seq !== zoneSidebarReq) return;

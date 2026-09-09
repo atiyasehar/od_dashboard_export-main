@@ -1,9 +1,9 @@
 /** OD SPA host: preload zone / buildings / flows in iframes; instant tab switching. */
 (function () {
   var PAGE_HINTS = {
-    'od-zones': 'Rules-based zone map',
-    'od-buildings': 'Click a zone to explore its buildings',
-    'od-flows': 'Rules map · incoming flows',
+    'od-zones': 'Click a zone · Ctrl/Cmd+click to add more',
+    'od-buildings': 'Click a zone to load buildings · Ctrl/Cmd+click to add',
+    'od-flows': 'Click a destination · Ctrl/Cmd+click to add',
   };
 
   var VIEW_BY_PAGE = {
@@ -28,7 +28,7 @@
   var ready = {};
   var dataReady = {};
   var activePage = 'od-zones';
-  var FRAME_CACHE_BUST = '20260707-host-kpi-sync';
+  var FRAME_CACHE_BUST = '20260909-transit-pins';
 
   function parentAttributionParam() {
     try {
@@ -73,12 +73,19 @@
   function notifyFlowsFrameDest(detail) {
     var frame = frames['od-flows'];
     if (!frame || !frame.contentWindow) return;
-    var dest = detail && detail.dest_geo_id ? String(detail.dest_geo_id) : '';
+    var ids = [];
+    if (window.DashZoneUi && DashZoneUi.parseGeoIdList) {
+      ids = DashZoneUi.parseGeoIdList(detail && (detail.dest_geo_ids || detail.dest_geo_id));
+    } else {
+      var dest = detail && detail.dest_geo_id ? String(detail.dest_geo_id) : '';
+      if (dest) ids = dest.split(',').map(function (s) { return s.trim(); }).filter(Boolean);
+    }
     var zb = detail && detail.zone_by === 'dest' ? 'dest' : 'rules';
     try {
       frame.contentWindow.postMessage({
         type: 'dash-select-dest',
-        dest_geo_id: dest,
+        dest_geo_id: ids.join(','),
+        dest_geo_ids: ids,
         zone_by: zb,
       }, '*');
     } catch (_) { /* empty */ }
@@ -96,7 +103,14 @@
   }
 
   function openFlowsWithDest(detail) {
-    var dest = detail && detail.dest_geo_id ? String(detail.dest_geo_id) : '';
+    var ids = [];
+    if (window.DashZoneUi && DashZoneUi.parseGeoIdList) {
+      ids = DashZoneUi.parseGeoIdList(detail && (detail.dest_geo_ids || detail.dest_geo_id));
+    } else {
+      var destRaw = detail && detail.dest_geo_id ? String(detail.dest_geo_id) : '';
+      if (destRaw) ids = destRaw.split(',').map(function (s) { return s.trim(); }).filter(Boolean);
+    }
+    var dest = ids.join(',');
     var zb = detail && detail.zone_by === 'dest' ? 'dest' : 'rules';
     syncAttributionFromMessage(zb);
     try {
@@ -112,12 +126,12 @@
       }
     } catch (_) { /* empty */ }
     showPage('od-flows', false);
-    notifyFlowsFrameDest({ dest_geo_id: dest, zone_by: zb });
+    notifyFlowsFrameDest({ dest_geo_id: dest, dest_geo_ids: ids, zone_by: zb });
     window.setTimeout(function () {
-      notifyFlowsFrameDest({ dest_geo_id: dest, zone_by: zb });
+      notifyFlowsFrameDest({ dest_geo_id: dest, dest_geo_ids: ids, zone_by: zb });
     }, 200);
     window.setTimeout(function () {
-      notifyFlowsFrameDest({ dest_geo_id: dest, zone_by: zb });
+      notifyFlowsFrameDest({ dest_geo_id: dest, dest_geo_ids: ids, zone_by: zb });
     }, 800);
   }
 
@@ -334,7 +348,12 @@
   }
 
   function syncFlowsDestUrlOnly(detail) {
-    var dest = detail && detail.dest_geo_id != null ? String(detail.dest_geo_id || '') : '';
+    var dest = '';
+    if (window.DashZoneUi && DashZoneUi.parseGeoIdList) {
+      dest = DashZoneUi.parseGeoIdList(detail && (detail.dest_geo_ids || detail.dest_geo_id)).join(',');
+    } else {
+      dest = detail && detail.dest_geo_id != null ? String(detail.dest_geo_id || '') : '';
+    }
     var zb = detail && detail.zone_by === 'dest' ? 'dest' : 'rules';
     syncAttributionFromMessage(zb);
     try {
@@ -368,14 +387,15 @@
         syncFlowsDestUrlOnly(e.data);
       }
       if (e.data.type === 'dash-zone-select') {
-        if (e.data.clear || !e.data.geo_id) {
+        if (e.data.clear || (!(e.data.geo_ids && e.data.geo_ids.length) && !e.data.geo_id)) {
           if (window.DashHostOd && typeof DashHostOd.clearZoneSidebar === 'function') {
             DashHostOd.clearZoneSidebar();
           }
         } else if (window.DashHostOd && typeof DashHostOd.loadZoneSidebar === 'function') {
-          DashHostOd.loadZoneSidebar(e.data.geo_id, e.data.zone_by, {
+          DashHostOd.loadZoneSidebar(e.data.geo_ids || e.data.geo_id, e.data.zone_by, {
             stats: e.data.stats,
             zone_label: e.data.zone_label,
+            geo_ids: e.data.geo_ids || e.data.geo_id,
           });
         }
       }

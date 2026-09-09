@@ -1350,16 +1350,49 @@ def _parse_building_grid_cell_deg(raw: str | None) -> float | None:
     return v
 
 
+def _parse_geo_id_list(*values) -> list[str]:
+    """Split comma/space/semicolon geo_id values; keep order, drop empties/dupes."""
+    out: list[str] = []
+    seen: set[str] = set()
+    chunks: list[str] = []
+    for v in values:
+        if v is None:
+            continue
+        if isinstance(v, (list, tuple, set)):
+            chunks.extend(str(x) for x in v)
+        else:
+            chunks.append(str(v))
+    for chunk in chunks:
+        for part in re.split(r"[,;\s]+", str(chunk).strip()):
+            gid = part.strip()
+            if not gid or gid in seen:
+                continue
+            seen.add(gid)
+            out.append(gid)
+    return out
+
+
+def _zone_geo_id_pred(expr: str, ids: list[str]) -> tuple[str, tuple]:
+    """SQL predicate matching split_part(trim(expr), '.', 1) to one or more geo_ids."""
+    if not ids:
+        return "FALSE", ()
+    split_expr = f"split_part(trim({expr}::text), '.', 1)"
+    if len(ids) == 1:
+        return f"{split_expr} = %s", (ids[0],)
+    return f"{split_expr} = ANY(%s)", (list(ids),)
+
+
 def _building_zone_filter_sql(
     cur, lat_expr: str, lon_expr: str, zone_geo_id: str | None, *, b_alias: str = "b"
 ) -> tuple[str, tuple]:
     """Filter buildings assigned to the PopGen zone (fast; used for zone drill-down)."""
     del cur, lat_expr, lon_expr  # kept for call-site compatibility
-    zid = (zone_geo_id or "").strip()
-    if not zid:
+    ids = _parse_geo_id_list(zone_geo_id)
+    if not ids:
         return "", ()
     a = b_alias
-    return f" AND split_part(trim({a}.zone_geo_id::text), '.', 1) = %s", (zid,)
+    sql, params = _zone_geo_id_pred(f"{a}.zone_geo_id", ids)
+    return f" AND {sql}", params
 
 
 def _pick_zone_emissions_route_assignment(

@@ -16,7 +16,7 @@
   <link rel="stylesheet" href="assets/dashboard-shell.css?v=11" />
   <link rel="stylesheet" href="assets/dashboard-embed.css?v=10" />
   <script src="assets/dashboard-embed.js?v=1"></script>
-  <script src="assets/dashboard-zone-ui.js?v=20"></script>
+  <script src="assets/dashboard-zone-ui.js?v=22"></script>
   <script src="assets/loading-overlay.js?v=11"></script>
   <style>
     :root {
@@ -255,6 +255,17 @@
       filter: drop-shadow(0 0 4px #ffffff) drop-shadow(0 0 10px #00e5ff);
       animation: selPulse 1.6s ease-in-out infinite;
     }
+    .zone-sel-chips { display: flex; flex-wrap: wrap; gap: 0.35rem; margin: 0.35rem 0 0.5rem; }
+    .zone-sel-chip {
+      display: inline-flex; align-items: center; gap: 0.2rem;
+      border: 1px solid var(--border); border-radius: 999px;
+      padding: 0.12rem 0.35rem 0.12rem 0.5rem;
+      font-size: 0.72rem; color: var(--text); background: rgba(94, 234, 212, 0.1);
+    }
+    .zone-sel-chip button {
+      background: none; border: 0; color: var(--muted); cursor: pointer;
+      font-size: 0.95rem; line-height: 1; padding: 0 0.15rem;
+    }
     .zone-cmm-boundary path {
       pointer-events: none;
       stroke-linejoin: round;
@@ -385,6 +396,7 @@
             <p class="hint" id="hint">Starting flows page…</p>
             <button type="button" class="close-x" id="clearDestBtn" aria-label="Clear destination" title="Clear selection" hidden>&times;</button>
           </div>
+          <div class="zone-sel-chips" id="flowDestChips"></div>
 
           <div id="kpiBlock" style="display:none">
             <div class="flows-kpi-grid">
@@ -432,12 +444,48 @@
 
   <script src="assets/dashboard-nav.js?v=17"></script>
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-  <script src="assets/dashboard-map-basemap.js"></script>
+  <script src="assets/dashboard-map-basemap.js?v=14"></script>
+  <script src="assets/dashboard-map-transit.js?v=5"></script>
   <script>
     const IS_EMBED = !!(window.DashEmbed && DashEmbed.isEmbed);
     const CACHE_TTL_MS = 60 * 60 * 1000;
     const qs = new URLSearchParams(window.location.search);
-    let destGeoId = (qs.get('dest_geo_id') || '').trim();
+    let destGeoId = '';
+    let destGeoIds = (window.DashZoneUi && DashZoneUi.parseGeoIdList)
+      ? DashZoneUi.parseGeoIdList(qs.get('dest_geo_id') || qs.get('dest_geo_ids') || '')
+      : String(qs.get('dest_geo_id') || '').split(',').map((s) => s.trim()).filter(Boolean);
+    destGeoId = destGeoIds[0] || '';
+    function selectedDestList() {
+      if (destGeoIds && destGeoIds.length) return destGeoIds;
+      return destGeoId ? [String(destGeoId)] : [];
+    }
+    function isSelectedDest(gid) {
+      const id = String(gid == null ? '' : gid);
+      return id && selectedDestList().indexOf(id) >= 0;
+    }
+    function setDestSelection(ids) {
+      destGeoIds = (window.DashZoneUi && DashZoneUi.parseGeoIdList)
+        ? DashZoneUi.parseGeoIdList(ids)
+        : (ids || []).map(String).filter(Boolean);
+      destGeoId = destGeoIds[0] || '';
+    }
+    function destSelectionLabel() {
+      if (window.DashZoneUi && DashZoneUi.selectionLabel) {
+        return DashZoneUi.selectionLabel(selectedDestList(), (gid) => zoneCt(gid, zoneMetaFromPayload(gid)));
+      }
+      const ids = selectedDestList();
+      if (ids.length > 1) return ids.length + ' zones';
+      return ids[0] ? zoneCt(ids[0], zoneMetaFromPayload(ids[0])) : '';
+    }
+    function renderFlowDestChips() {
+      if (!(window.DashZoneUi && DashZoneUi.renderSelectionChips)) return;
+      DashZoneUi.renderSelectionChips(
+        document.getElementById('flowDestChips'),
+        selectedDestList(),
+        (gid) => zoneCt(gid, zoneMetaFromPayload(gid)),
+        (gid) => selectZone(gid, { ctrlKey: true, metaKey: true })
+      );
+    }
     function resolveInitialZoneBy() {
       if (window.DashNav) return DashNav.readAttribution('rules');
       var v = (qs.get('zone_by') || qs.get('attribution') || 'rules').trim().toLowerCase();
@@ -574,7 +622,9 @@
     }
     function zoneTotalKpiLabel() {
       const mode = zoneBy === 'dest' ? 'destination map' : 'rules-based map';
-      return 'Zone total · ' + mode + ' (includes intra-zone)';
+      const n = selectedDestList().length;
+      const scope = n > 1 ? (n + ' zones') : 'Zone total';
+      return scope + ' · ' + mode + ' (includes intra-zone)';
     }
 
     function zoneTotalFromSummary() {
@@ -624,7 +674,8 @@
       try {
         window.parent.postMessage({
           type: 'dash-flows-dest',
-          dest_geo_id: destGeoId || '',
+          dest_geo_id: selectedDestList().join(','),
+          dest_geo_ids: selectedDestList(),
           zone_by: zoneBy === 'dest' ? 'dest' : 'rules',
         }, '*');
       } catch (_) {}
@@ -634,14 +685,9 @@
       const gid = String(geoId || destGeoId || '').trim();
       if (!gid) return null;
       const zm = zoneMetaFromPayload(gid);
-      const totals = gid === String(destGeoId) ? zoneTotalFromSummary() : {
-        trips: zoneTripsExpanded(zm, 0),
-        emis: Number(zm && zm.total_emissions_g) || 0,
-        km: Number(zm && (zm.total_distance_km_weighted != null ? zm.total_distance_km_weighted : zm.total_distance_km)) || 0,
-      };
-      const trips = Number(totals.trips) || 0;
-      const emis = Number(totals.emis) || 0;
-      const km = Number(totals.km) || 0;
+      const trips = zoneTripsExpanded(zm, 0);
+      const emis = Number(zm && zm.total_emissions_g) || 0;
+      const km = Number(zm && (zm.total_distance_km_weighted != null ? zm.total_distance_km_weighted : zm.total_distance_km)) || 0;
       return {
         geo_id: gid,
         trips,
@@ -658,24 +704,29 @@
     function notifyParentZoneSelection(clear) {
       if (!IS_EMBED || window.parent === window) return;
       try {
-        if (clear || !destGeoId) {
+        const ids = selectedDestList();
+        if (clear || !ids.length) {
           window.parent.postMessage({
             type: 'dash-zone-select',
             clear: true,
             geo_id: '',
+            geo_ids: [],
             zone_by: zoneBy === 'dest' ? 'dest' : 'rules',
           }, '*');
           return;
         }
-        const stats = zoneStatsForHost(destGeoId);
-        const zm = zoneMetaFromPayload(destGeoId);
+        const rows = ids.map((gid) => zoneStatsForHost(gid)).filter(Boolean);
+        const stats = (window.DashZoneUi && DashZoneUi.aggregateZoneStats)
+          ? Object.assign({}, DashZoneUi.aggregateZoneStats(rows), { geo_ids: ids, kpi_scope: 'zone' })
+          : Object.assign({}, (rows[0] || {}), { geo_ids: ids });
         window.parent.postMessage({
           type: 'dash-zone-select',
-          geo_id: String(destGeoId),
+          geo_id: ids[0],
+          geo_ids: ids,
           zone_by: zoneBy === 'dest' ? 'dest' : 'rules',
           clear: false,
           stats,
-          zone_label: zoneCt(destGeoId, zm || flowSummary),
+          zone_label: destSelectionLabel(),
         }, '*');
       } catch (_) {}
     }
@@ -721,12 +772,13 @@
 
     function clearDestinationSelection() {
       if (!destGeoId) return;
-      destGeoId = '';
+      setDestSelection([]);
       flowPage = 1;
       flowShowAll = false;
       syncUrl();
       syncFlowPageUi();
       updateZoneByUi();
+      renderFlowDestChips();
       resetFlowsUiAfterClear();
       notifyParentDestChange();
       notifyParentZoneSelection(true);
@@ -747,10 +799,11 @@
       const live = document.getElementById('liveHint');
       if (live) {
         live.textContent = destGeoId
-          ? (zoneMapModeLabel() + ' · ' + zoneCt(destGeoId, zoneMetaFromPayload(destGeoId)))
+          ? (zoneMapModeLabel() + ' · ' + destSelectionLabel())
           : (zoneMapModeLabel() + ' · incoming flows');
       }
       updateClearDestBtn();
+      renderFlowDestChips();
     }
     async function switchZoneBy(next) {
       const zb = next === 'dest' ? 'dest' : 'rules';
@@ -779,7 +832,7 @@
       polygonUpgradePromise = Promise.resolve();
       const bulkP = loadAllFlows();
       if (destGeoId) {
-        setHintLoading('Loading incoming flows for <strong class="sel">' + zoneCt(destGeoId, zoneMetaFromPayload(destGeoId)) + '</strong>…');
+        setHintLoading('Loading incoming flows for <strong class="sel">' + destSelectionLabel() + '</strong>…');
         await loadIncomingFlows();
       } else {
         setHintReady();
@@ -820,6 +873,7 @@
       map.getPane('flowLabelPane').style.zIndex = 720;
       map.getPane('flowLabelPane').style.pointerEvents = 'none';
       DashMapBasemap.addTo(map, 'light_all');
+      if (window.DashMapTransit) DashMapTransit.attach(map);
       flowArcLayer = L.layerGroup().addTo(map);
       flowLabelLayer = L.layerGroup().addTo(map);
       map.fitBounds([[45.38, -74.0], [45.68, -73.35]], { animate: false });
@@ -955,7 +1009,15 @@
     }
 
     function flowsMatchDest(data) {
-      return data && String(data.dest_geo_id || destGeoId) === String(destGeoId);
+      const ids = selectedDestList();
+      if (!data || !ids.length) return false;
+      const fromData = (window.DashZoneUi && DashZoneUi.parseGeoIdList)
+        ? DashZoneUi.parseGeoIdList(data.dest_geo_ids || data.dest_geo_id)
+        : String(data.dest_geo_id || destGeoId).split(',').map((s) => s.trim()).filter(Boolean);
+      if (fromData.length !== ids.length) return false;
+      const a = ids.slice().sort().join(',');
+      const b = fromData.slice().sort().join(',');
+      return a === b;
     }
 
     function fmt(n) { return Number(n || 0).toLocaleString(); }
@@ -1129,8 +1191,13 @@
     }
 
     function destLatLonForMap() {
-      const c = zoneCentroid(destGeoId);
-      if (c) return c;
+      const ids = selectedDestList();
+      const pts = ids.map((gid) => zoneCentroid(gid)).filter(Boolean);
+      if (pts.length) {
+        const lat = pts.reduce((a, p) => a + p[0], 0) / pts.length;
+        const lon = pts.reduce((a, p) => a + p[1], 0) / pts.length;
+        return [lat, lon];
+      }
       if (flowSummary && Number.isFinite(+flowSummary.dest_lat) && Number.isFinite(+flowSummary.dest_lon)) {
         return [+flowSummary.dest_lat, +flowSummary.dest_lon];
       }
@@ -1142,7 +1209,7 @@
       const p = IS_EMBED
         ? new URLSearchParams(window.location.search)
         : new URLSearchParams();
-      if (destGeoId) p.set('dest_geo_id', destGeoId);
+      if (destGeoId) p.set('dest_geo_id', selectedDestList().join(','));
       else p.delete('dest_geo_id');
       p.delete('limit');
       p.delete('flow_limit');
@@ -1177,12 +1244,12 @@
       const zones = zonePayload.zones || [];
       const zonesById = zonesByIdFromList(zones);
       const zoneDistById = zonePayload.zoneDistById || {};
-      const destSelected = !!destGeoId;
+      const destSelected = selectedDestList().length > 0;
 
       const bindClick = (layer, zid) => {
         layer.on('click', (e) => {
           L.DomEvent.stopPropagation(e);
-          selectZone(zid);
+          selectZone(zid, e);
         });
       };
 
@@ -1196,7 +1263,7 @@
           style(feature) {
             const p = feature.properties || {};
             const zid = String(p.geo_id);
-            const isSel = destGeoId && zid === String(destGeoId);
+            const isSel = destGeoId && isSelectedDest(zid);
             const t = emissionNormFromG(p.total_emissions_g);
             if (isSel) {
               return {
@@ -1231,11 +1298,11 @@
             const p = feature.properties || {};
             const zid = String(p.geo_id);
             layer.bindTooltip(
-              zoneTooltipHtml(zid, p, zonesById, zoneDistById, '<br>click to explore incoming'),
+              zoneTooltipHtml(zid, p, zonesById, zoneDistById, '<br>click to select · Ctrl/Cmd+click to add'),
               { sticky: true }
             );
             bindClick(layer, zid);
-            if (destGeoId && zid === String(destGeoId)) {
+            if (destGeoId && isSelectedDest(zid)) {
               try { layer.bringToFront(); } catch (_) {}
             }
           },
@@ -1469,7 +1536,7 @@
           interactive: true,
         })
           .bindTooltip(
-            '<strong>Origin ' + zoneCt(f.orig_geo_id, f) + ' → dest ' + zoneCt(destGeoId, flowSummary) + '</strong><br>' +
+            '<strong>Origin ' + zoneCt(f.orig_geo_id, f) + ' → dest ' + destSelectionLabel() + '</strong><br>' +
             '#' + globalRank + ' incoming flow · ' + fmtTrip(f.trips) + ' trips<br>' +
             fmtKg(f.total_emissions_g) + ' kg CO₂ · ' + fmtDist(f.total_distance_km || 0),
             { sticky: true, direction: 'top' }
@@ -1506,7 +1573,7 @@
           interactive: false,
         }).addTo(flowArcLayer);
         L.marker(destPt, {
-          icon: destZoneLabelIcon(zoneCt(destGeoId, flowSummary)),
+          icon: destZoneLabelIcon(destSelectionLabel()),
           pane: 'flowLabelPane',
           interactive: false,
           keyboard: false,
@@ -1602,7 +1669,7 @@
       const hasTableRows = shown.length > 0;
       document.getElementById('flowTable').style.display = hasTableRows ? '' : 'none';
       document.getElementById('emptyFlows').style.display = hasTableRows ? 'none' : 'block';
-      document.getElementById('emptyFlows').textContent = 'No flows for this zone.';
+      document.getElementById('emptyFlows').textContent = 'No flows for this selection.';
       const originTotal = total;
       const sortLbl = flowSortLabelText();
       document.getElementById('tableMeta').textContent = shown.length
@@ -1635,9 +1702,10 @@
       }));
       rebuildFlowPageOptions(rankedFlowsList().length || data.origin_zone_count || 0);
       document.getElementById('hint').innerHTML =
-        'Destination <strong class="sel">' + zoneCt(destGeoId, flowSummary) + '</strong> — origins sorted by <strong>' +
+        'Destination <strong class="sel">' + destSelectionLabel() + '</strong> — origins sorted by <strong>' +
         flowSortLabelText() + '</strong> (' + flowPageLabel(rankedFlowsList().length) + ').';
       updateClearDestBtn();
+      renderFlowDestChips();
       applyFlows();
       notifyParentZoneSelection();
     }
@@ -1697,23 +1765,29 @@
     }
 
     async function loadIncomingFlows() {
-      if (!destGeoId) {
+      const ids = selectedDestList();
+      if (!ids.length) {
         resetFlowsUiAfterClear();
         return;
       }
-      // Instant path: serve from the prefetched bulk cache (no DB round trip).
       if (allFlowsCache) {
         ++flowsLoadSeq;
         if (flowsFetchAbort) { flowsFetchAbort.abort(); flowsFetchAbort = null; }
-        const entry = allFlowsCache[String(destGeoId)] || emptyIncomingPayload(destGeoId);
-        applyIncomingPayload(entry);
+        const payloads = ids.map((id) => allFlowsCache[String(id)] || emptyIncomingPayload(id));
+        const merged = (ids.length === 1)
+          ? payloads[0]
+          : ((window.DashZoneUi && DashZoneUi.mergeIncomingPayloads)
+            ? DashZoneUi.mergeIncomingPayloads(ids, payloads)
+            : payloads[0]);
+        applyIncomingPayload(merged);
         return;
       }
       const seq = ++flowsLoadSeq;
       if (flowsFetchAbort) flowsFetchAbort.abort();
       flowsFetchAbort = new AbortController();
       const q = new URLSearchParams({
-        dest_geo_id: destGeoId,
+        dest_geo_id: ids.join(','),
+        dest_geo_ids: ids.join(','),
         limit: 'all',
         zone_by: zoneBy,
         _: String(Date.now()),
@@ -1734,15 +1808,18 @@
       }
     }
 
-    async function handleExternalDestSelection(dest, zb) {
-      const zid = String(dest || '').trim();
+    async function handleExternalDestSelection(dest, zb, destIds) {
+      const ids = (window.DashZoneUi && DashZoneUi.parseGeoIdList)
+        ? DashZoneUi.parseGeoIdList(destIds || dest)
+        : String(dest || '').split(',').map((s) => s.trim()).filter(Boolean);
       const want = zb === 'dest' ? 'dest' : 'rules';
       if (want !== zoneBy) await switchZoneBy(want);
-      if (!zid) {
+      if (!ids.length) {
         if (destGeoId) clearDestinationSelection();
         return;
       }
-      if (zid !== String(destGeoId)) await selectZone(zid);
+      const same = selectedDestList().join(',') === ids.join(',');
+      if (!same) await selectZone(ids, null, true);
     }
 
     function readDestFromParentUrl() {
@@ -1756,17 +1833,42 @@
 
     window.addEventListener('message', (e) => {
       if (!e.data || e.data.type !== 'dash-select-dest') return;
-      handleExternalDestSelection(e.data.dest_geo_id, e.data.zone_by).catch((err) => {
+      handleExternalDestSelection(e.data.dest_geo_id, e.data.zone_by, e.data.dest_geo_ids).catch((err) => {
         console.warn('dash-select-dest:', err);
       });
     });
 
-    async function selectZone(geoId) {
-      const zid = String(geoId);
-      if (zid === String(destGeoId)) return;
-      destGeoId = zid;
+    async function selectZone(geoId, ev, replaceAll) {
+      const incoming = (window.DashZoneUi && DashZoneUi.parseGeoIdList)
+        ? DashZoneUi.parseGeoIdList(geoId)
+        : (Array.isArray(geoId) ? geoId.map(String) : [String(geoId || '')]).filter(Boolean);
+      if (!incoming.length) return;
+      const toggle = !replaceAll && window.DashZoneUi && DashZoneUi.clickIsMultiToggle
+        ? DashZoneUi.clickIsMultiToggle(ev)
+        : false;
+      let next;
+      if (replaceAll) {
+        next = incoming;
+      } else if (toggle) {
+        next = incoming.reduce((acc, gid) => {
+          return (window.DashZoneUi && DashZoneUi.toggleGeoId)
+            ? DashZoneUi.toggleGeoId(acc, gid)
+            : (acc.indexOf(gid) >= 0 ? acc.filter((id) => id !== gid) : acc.concat([gid]));
+        }, selectedDestList());
+      } else if (incoming.length === 1 && selectedDestList().length === 1 && incoming[0] === destGeoId) {
+        return;
+      } else {
+        next = incoming;
+      }
+      if (!next.length) {
+        clearDestinationSelection();
+        return;
+      }
+      if (!replaceAll && next.join(',') === selectedDestList().join(',')) return;
+      setDestSelection(next);
       syncUrl();
       updateZoneByUi();
+      renderFlowDestChips();
       notifyParentDestChange();
       notifyParentZoneSelection();
       document.getElementById('err').style.display = 'none';
@@ -1783,7 +1885,7 @@
       document.getElementById('emptyFlows').textContent = 'Loading flows…';
       renderZones(false);
       document.getElementById('hint').innerHTML =
-        'Loading incoming flows for <strong class="sel">' + zoneCt(destGeoId, zoneMetaFromPayload(destGeoId)) + '</strong>…';
+        'Loading incoming flows for <strong class="sel">' + destSelectionLabel() + '</strong>…';
       try {
         await loadIncomingFlows();
       } catch (e) {
@@ -1920,11 +2022,11 @@
       const zoneCodeQ = (qs.get('dest_zone_code') || qs.get('zone_code') || '').trim();
       if (!destGeoId && IS_EMBED) {
         const parentDest = readDestFromParentUrl();
-        if (parentDest) destGeoId = parentDest;
+        if (parentDest) setDestSelection(parentDest);
       }
       if (!destGeoId && zoneCodeQ && window.DashZoneUi && DashZoneUi.resolveGeoIdQuery) {
         const gid = DashZoneUi.resolveGeoIdQuery(zoneCodeQ);
-        if (gid) destGeoId = gid;
+        if (gid) setDestSelection(gid);
       }
     }
 
@@ -1943,13 +2045,14 @@
     function setHintReady() {
       if (destGeoId) return;
       setHintLoading(
-        'PM23 ' + zoneMapModeLabel().toLowerCase() + ' CO₂ by zone (Montreal island). <strong>Click a zone</strong> to explore incoming flows.'
+        'PM23 ' + zoneMapModeLabel().toLowerCase() + ' CO₂ by zone (Montreal island). <strong>Click a zone</strong> to explore incoming flows. <strong>Ctrl/Cmd+click</strong> to add destinations.'
       );
     }
 
     async function main() {
       await ensureZoneCodeMap();
       updateZoneByUi();
+      renderFlowDestChips();
       syncFlowPageUi();
       if (window.DashNav) {
         DashNav.initAttributionTabs({
@@ -2018,7 +2121,7 @@
         const bulkP = loadAllFlows();
 
         if (destGeoId) {
-          setHintLoading('Loading incoming flows for <strong class="sel">' + zoneCt(destGeoId, zoneMetaFromPayload(destGeoId)) + '</strong>…');
+          setHintLoading('Loading incoming flows for <strong class="sel">' + destSelectionLabel() + '</strong>…');
           await loadIncomingFlows();
         }
         bulkP.then(() => {

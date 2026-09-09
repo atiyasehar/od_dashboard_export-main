@@ -1,10 +1,49 @@
-/** Basemap helper: Carto tiles online; plain grid background when DashConfig.offline(). */
+/** Basemap helper: OSM streets (no API key), dimmed so overlays stay readable. */
 (function (global) {
-  var CARTO = {
-    light_all: 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',
-    light_nolabels: 'https://{s}.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}{r}.png',
-    dark_all: 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
+  var OSM_ATTR = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>';
+  var OSM_URL = 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
+  var ESRI_DARK = 'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}';
+
+  var OSM_OPTS = {
+    attribution: OSM_ATTR,
+    className: 'dash-basemap-dim',
+    maxNativeZoom: 19,
+    maxZoom: 20,
   };
+
+  var VARIANTS = {
+    light_all: {
+      url: OSM_URL,
+      background: '#9aa19a',
+      options: OSM_OPTS,
+    },
+    light_nolabels: {
+      url: OSM_URL,
+      background: '#9aa19a',
+      options: OSM_OPTS,
+    },
+    dark_all: {
+      url: ESRI_DARK,
+      background: '#1a2436',
+      options: {
+        attribution: 'Tiles &copy; Esri',
+        maxNativeZoom: 16,
+        maxZoom: 20,
+      },
+    },
+  };
+
+  function ensureStyles() {
+    if (typeof document === 'undefined' || document.getElementById('dash-basemap-styles')) return;
+    var el = document.createElement('style');
+    el.id = 'dash-basemap-styles';
+    el.textContent = [
+      '.leaflet-container { background: #9aa19a; }',
+      /* Keep streets/parks/labels; pull down the white wash so flow/zone layers read. */
+      '.dash-basemap-dim { filter: brightness(0.62) saturate(0.72) contrast(0.98); }',
+    ].join('\n');
+    document.head.appendChild(el);
+  }
 
   function offline() {
     if (global.DashConfig && typeof global.DashConfig.offline === 'function') {
@@ -28,13 +67,12 @@
       markOfflineMap(map);
       return null;
     }
-    var url = CARTO[variant] || CARTO.light_all;
-    var layer = global.L.tileLayer(url, Object.assign({
-      attribution: '&copy; OpenStreetMap &copy; CARTO',
-      subdomains: 'abcd',
-      maxZoom: 20,
-    }, opts));
+    ensureStyles();
+    var spec = VARIANTS[variant] || VARIANTS.light_all;
+    var layer = global.L.tileLayer(spec.url, Object.assign({}, spec.options, opts));
     layer.addTo(map);
+    var el = map.getContainer && map.getContainer();
+    if (el && spec.background) el.style.background = spec.background;
     return layer;
   }
 
