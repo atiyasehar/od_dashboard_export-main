@@ -200,7 +200,7 @@ Two attribution modes (toolbar buttons):
 4. KPIs and charts in the sidebar **sum** the selected zones. The label becomes `N zones` when more than one is selected.
 5. Use the emission filter (minimum kg CO₂) if available to thin low-emission zones.
 6. From a selection you can jump to **Flows** or **Buildings** (the same zone ids are kept).
-7. **Transit overlay** (bottom-left on this map, and on Buildings / Flows / Boundaries) turns on STM metro, REM, exo trains, and STM buses. Station pins have names on hover. Bus stops only appear after you zoom in — there are thousands of them.
+7. **Transit overlay** (bottom-left on this map, and on Buildings / Flows / Boundaries) turns on STM metro, REM, exo trains, and STM buses. The server downloads GTFS when it starts (first run, while online) and caches it under `data/cache/`. Station pins have names on hover. Bus stops only appear after you zoom in — there are thousands of them.
 
 Map tabs may include multiple choropleth variants (e.g. emissions intensity, trip counts). Use the map tab row above the map canvas.
 

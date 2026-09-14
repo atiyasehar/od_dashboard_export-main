@@ -34,7 +34,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import dashboard_server as _dashboard_server  # noqa: E402
 
 from zone_map_anchors import fetch_zone_flow_anchors, patch_flow_payload_anchors  # noqa: E402
-from transit_overlay import get_transit_network  # noqa: E402
+from transit_overlay import get_transit_network, prefetch_transit_network  # noqa: E402
 
 from dashboard_server import (  # noqa: E402
     CMM_BOUNDS,
@@ -3579,4 +3579,9 @@ if __name__ == "__main__":
     print(f"  Flows: {base}/od-flows.html")
     if DEPLOY["show_boundary_button"]:
         print(f"  Boundaries: {base}/od-zones-boundary.html")
+    prefetch_transit_network(
+        _project_root(),
+        allow_download=not DEPLOY["offline"],
+        background=True,
+    )
     app.run(host=args.host, port=args.port, debug=False)

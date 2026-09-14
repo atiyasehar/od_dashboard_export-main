@@ -119,3 +119,10 @@ class TestGtfsZip:
         }
         assert _resolve_station_id(idx, "ST1P") == "ST1"
         assert _resolve_station_id(idx, "ST1") == "ST1"
+
+
+class TestPrefetch:
+    def test_offline_without_cache_does_not_raise(self, tmp_path: Path):
+        from transit_overlay import prefetch_transit_network
+
+        prefetch_transit_network(tmp_path, allow_download=False, background=False)

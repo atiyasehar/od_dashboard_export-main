@@ -366,6 +366,63 @@ def _build_from_gtfs(bundle_root: Path) -> tuple[list[dict[str, Any]], list[dict
     return lines, stops
 
 
+def cache_is_warm(bundle_root: Path) -> bool:
+    """True when rail+bus GeoJSON caches exist and are within TTL."""
+    return _fresh(_geojson_path(bundle_root, "rail")) and _fresh(_geojson_path(bundle_root, "bus"))
+
+
+def prefetch_transit_network(
+    bundle_root: Path,
+    *,
+    allow_download: bool = True,
+    background: bool = True,
+) -> None:
+    """Warm GTFS cache on dashboard start so the overlay is ready on first click.
+
+    Downloads STM, exo, and REM zips only when the cache is missing or stale.
+    Failures are logged; the HTTP server still starts.
+    """
+
+    def _run() -> None:
+        try:
+            if cache_is_warm(bundle_root):
+                payload = get_transit_network(bundle_root, group="rail")
+                print(
+                    "Transit overlay: using cached GTFS "
+                    f"({payload.get('feature_count', 0)} rail lines, "
+                    f"{payload.get('stop_count', 0)} rail stops)",
+                    flush=True,
+                )
+                return
+            if not allow_download:
+                print(
+                    "Transit overlay: no cache yet (offline). "
+                    "Turn the overlay on once while online, or copy data/cache/.",
+                    flush=True,
+                )
+                return
+            print("Transit overlay: first run — downloading STM, REM, exo GTFS…", flush=True)
+            rail = get_transit_network(bundle_root, group="rail")
+            bus = get_transit_network(bundle_root, group="bus")
+            print(
+                f"  Transit rail: {rail.get('feature_count', 0)} lines, "
+                f"{rail.get('stop_count', 0)} stops",
+                flush=True,
+            )
+            print(
+                f"  Transit bus: {bus.get('feature_count', 0)} lines, "
+                f"{bus.get('stop_count', 0)} stops",
+                flush=True,
+            )
+        except Exception as exc:
+            print(f"  Transit overlay prefetch skipped: {exc}", flush=True)
+
+    if background:
+        threading.Thread(target=_run, name="transit-prefetch", daemon=True).start()
+    else:
+        _run()
+
+
 def get_transit_network(
     bundle_root: Path,
     *,

@@ -69,6 +69,8 @@ Start-Process "http://127.0.0.1:$env:PORT/"
 python scripts/run_dashboard.py --bundle-root .
 ```
 
+On startup the server warms the **transit overlay** in the background (STM, REM, exo GTFS). The first run needs internet and can take half a minute; later starts reuse `data/cache/`. Street tiles are **not** pre-downloaded — the browser loads OpenStreetMap as you pan the map. There is no separate road-network file.
+
 ---
 
 ### Linux / macOS (bash, from project root)
@@ -592,7 +594,7 @@ Update `manifest.json` `created_at` after re-dumping.
 | UI looks outdated | Browser cache | Hard refresh (Ctrl+Shift+R) |
 | `Address already in use` | Another process on your `PORT` | Change `PORT` in `deploy.env` or stop the other process |
 | Blank map background | Offline mode or no network | Expected with `DASH_OFFLINE=true`; zones/buildings still render. Online mode needs OpenStreetMap tile access |
-| Transit overlay empty / 503 | No GTFS cache yet, or offline with empty `data/cache/` | Stay online for the first load; later runs use the cache. Overlay needs **no API key**. |
+| Transit overlay empty / 503 | No GTFS cache yet, or offline with empty `data/cache/` | Restart once while online; the server downloads GTFS at startup. Overlay needs **no API key**. |
 | PowerShell: script is not digitally signed | Execution policy | `powershell -ExecutionPolicy Bypass -File .\scripts\start_dashboard.ps1` or `python scripts/run_dashboard.py --bundle-root .` |
 | Leaflet/Chart failed to load | CDN blocked, offline not enabled | Set `DASH_OFFLINE=true` in `deploy.env` and restart |
 | Opened HTML as `file://` | Not using Flask | Use `http://127.0.0.1:<PORT>/...` |
