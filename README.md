@@ -2,7 +2,9 @@
 
 Portable **PM23 survey** dashboard — CMM island-eligible car trips, zone maps, buildings, and flows.
 
-**Runtime needs only:** this folder + PostgreSQL database **`od_dashboard`** (schema **`public`**). No PopGen2023 repo or `Synthetic2023` database on the target machine.
+Click a zone to select it. **Ctrl/Cmd** or **Shift** click adds or removes zones; KPIs, charts, buildings, and incoming flows then **sum** across the selection (flows that stay inside the selection are dropped from the incoming list). Maps use **OpenStreetMap** tiles (dimmed, no API key). Bottom-left **Transit overlay** draws STM metro, REM, exo trains, and STM buses from official GTFS.
+
+**Runtime needs only:** this folder + PostgreSQL database **`od_dashboard`** (schema **`public`**). No PopGen2023 repo or `Synthetic2023` database on the target machine. No map or transit API keys.
 
 | Resource | Link |
 |----------|------|
@@ -50,8 +52,9 @@ pg_restore -h $env:PGHOST -p $env:PGPORT -U $env:PGUSER -d $env:PGDATABASE `
 psql -h $env:PGHOST -p $env:PGPORT -U $env:PGUSER -d $env:PGDATABASE `
   -c "CREATE EXTENSION IF NOT EXISTS postgis;"
 
-# 5. Run
+# 5. Run (if PowerShell blocks the script as unsigned, see Troubleshooting)
 .\scripts\start_dashboard.ps1
+# or: powershell -ExecutionPolicy Bypass -File .\scripts\start_dashboard.ps1
 
 # 6. Verify
 Invoke-RestMethod "http://127.0.0.1:$env:PORT/api/health" | Select-Object ok, db_host, db_port, dbname, schema
@@ -229,6 +232,12 @@ CREATE EXTENSION IF NOT EXISTS postgis WITH SCHEMA public;
 .\scripts\start_dashboard.ps1
 ```
 
+If PowerShell says the script is not digitally signed, don’t change the machine policy — bypass that one file, or start Python yourself:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\start_dashboard.ps1
+```
+
 Or manually (settings from `deploy.env` are auto-loaded by `run_dashboard.py`):
 
 ```powershell
@@ -330,7 +339,7 @@ ORDER BY table_name;
 
 ## Automated tests
 
-Regression suite for helpers, map assets, Flask pages, and `/api/od/*` endpoints. Database checks skip automatically when PostgreSQL is not reachable; transit overlay skips if GTFS cache/download is unavailable.
+`tests/` is a pytest suite for helpers, map assets, pages, and `/api/od/*`. Unit tests run without Postgres. Live API checks skip if the database is down; transit skips if GTFS isn’t cached and can’t be downloaded.
 
 ```powershell
 pip install -r requirements.txt
@@ -340,13 +349,11 @@ python -m pytest tests
 
 Linux / macOS: `python3 -m pytest tests`
 
-Frontend helper tests (`tests/test_zone_ui_js.py`) skip unless `node` is on PATH. All other tests are Python-only.
-
-Useful filters:
+The four frontend helper tests in `tests/test_zone_ui_js.py` need `node` on PATH; everything else is Python-only.
 
 ```powershell
-python -m pytest tests -k "not TestOdApis"   # unit + static only
-python -m pytest tests -k transit            # transit overlay
+python -m pytest tests -k "not TestOdApis"   # helpers + static files
+python -m pytest tests -k transit            # GTFS overlay
 ```
 
 ---
@@ -441,10 +448,11 @@ Restart after changing the setting. The start scripts (`start_dashboard.ps1` / `
 |--|------------------|-------------------------------|
 | **Leaflet / Chart.js** | Loaded from unpkg / jsDelivr CDN | Bundled in `dashboard/assets/vendor/` |
 | **Fonts** | Google Fonts (DM Sans, Outfit) | System UI fonts |
-| **Map basemap** | OpenStreetMap raster tiles (dimmed) | Dark grid background (no tile requests) |
+| **Map basemap** | OpenStreetMap raster tiles (dimmed, no API key) | Dark grid background (no tile requests) |
+| **Transit overlay** | STM / REM / exo GTFS (cached under `data/cache/`) | Uses a cache already on disk; first download needs the network |
 | **Zone / building / flow layers** | Yes | Yes (same API data from PostgreSQL) |
 | **Charts (dashboard, buildings)** | Yes | Yes |
-| **Internet required for UI** | Yes (after first load, tiles refresh) | No |
+| **Internet required for UI** | Yes (tiles + first GTFS fetch) | No, if GTFS was cached earlier |
 
 Maps in offline mode show a plain grid behind zone polygons, building footprints, and flow arcs. All interactive features that depend on the database still work.
 
@@ -462,7 +470,9 @@ Bundled vendor files (included in the repo and in pack bundles):
 - `dashboard/assets/vendor/leaflet.css`, `leaflet.js`, `leaflet-heat.js`
 - `dashboard/assets/vendor/chart.umd.min.js`, `chartjs-plugin-datalabels.min.js`
 - `dashboard/assets/vendor/images/` (Leaflet marker/layer icons)
-- `dashboard/assets/dashboard-map-basemap.js`, `dashboard-offline.css`
+- `dashboard/assets/dashboard-map-basemap.js`, `dashboard-map-transit.js`, `dashboard-offline.css`
+
+Transit lines come from `scripts/transit_overlay.py` (GTFS → GeoJSON, cache in `data/cache/`, gitignored).
 
 ### Verify offline mode
 
@@ -497,6 +507,7 @@ Expected: `"offline": true`.
 Keep the default (`DASH_OFFLINE` unset or `false`) if you want:
 
 - Street-style OpenStreetMap basemap tiles
+- First-time transit overlay download (STM, REM, exo GTFS)
 - Google Fonts typography matching the design preview
 
 Online mode is fine for most local development and deployments with normal internet access.
@@ -511,7 +522,9 @@ Online mode is fine for most local development and deployments with normal inter
 | `dashboard/assets/vendor/` | Bundled Leaflet, Chart.js, icons (for offline mode) |
 | `scripts/run_dashboard.py` | Flask API server (**use this to run**) |
 | `scripts/start_dashboard.ps1` / `start_dashboard.sh` | Load `deploy.env` and start the server |
+| `scripts/transit_overlay.py` | Montreal GTFS overlay (STM, REM, exo) |
 | `scripts/dashboard_server.py` | Shared API helpers used by `run_dashboard.py` |
+| `tests/` | pytest unit + API regression suite |
 | `scripts/zone_map_anchors.py` | Zone map / flow anchor helpers |
 | `scripts/meeting_emissions_attribution.py` | Attribution SQL helpers |
 | `scripts/od_table_names.py` / `popgen_constants.py` | Table names and shared constants |
@@ -520,7 +533,7 @@ Online mode is fine for most local development and deployments with normal inter
 | `deploy.example.env` | Configuration template → copy to `deploy.env` |
 | `manifest.json` | Dump metadata and row counts |
 
-**Buildings view** reads all footprint and emission data from PostgreSQL. Click a **zone** first, then a **building**.
+**Buildings view** reads footprints and emissions from PostgreSQL. Select one or more **zones** first (Ctrl/Cmd or Shift click to add), then click a **building**.
 
 ---
 
@@ -574,11 +587,13 @@ Update `manifest.json` `created_at` after re-dumping.
 | `ok: false` in health | Wrong credentials or DB not running | Fix `PGHOST`/`PGPORT`/`PGUSER`/`PGPASSWORD` in `deploy.env` |
 | 503 “No OD10 zone table found” | Dump not restored or wrong schema | Restore dump; set `PGSCHEMA` to match where tables live |
 | HTTP 500 on maps | PostGIS missing | `CREATE EXTENSION postgis;` |
-| Buildings map empty | No zone selected | Click a zone on the choropleth first |
+| Buildings map empty | No zone selected | Click a zone on the choropleth first (Ctrl/Cmd+click to add more) |
 | Building CO₂ shows 0 | Old dump or wrong table | Health → `building_emissions.rows` ≈ 924757 |
 | UI looks outdated | Browser cache | Hard refresh (Ctrl+Shift+R) |
 | `Address already in use` | Another process on your `PORT` | Change `PORT` in `deploy.env` or stop the other process |
 | Blank map background | Offline mode or no network | Expected with `DASH_OFFLINE=true`; zones/buildings still render. Online mode needs OpenStreetMap tile access |
+| Transit overlay empty / 503 | No GTFS cache yet, or offline with empty `data/cache/` | Stay online for the first load; later runs use the cache. Overlay needs **no API key**. |
+| PowerShell: script is not digitally signed | Execution policy | `powershell -ExecutionPolicy Bypass -File .\scripts\start_dashboard.ps1` or `python scripts/run_dashboard.py --bundle-root .` |
 | Leaflet/Chart failed to load | CDN blocked, offline not enabled | Set `DASH_OFFLINE=true` in `deploy.env` and restart |
 | Opened HTML as `file://` | Not using Flask | Use `http://127.0.0.1:<PORT>/...` |
 
@@ -606,6 +621,7 @@ Get-NetTCPConnection -LocalPort $env:PORT -State Listen | ForEach-Object {
 - `dashboard/` — SPA + map views
 - `scripts/run_dashboard.py` — API server
 - `scripts/start_dashboard.ps1` / `start_dashboard.sh` — load `deploy.env` and run
+- `scripts/transit_overlay.py` — STM / REM / exo GTFS overlay
 - `scripts/run_tests.py` / `tests/` — pytest unit and API regression suite
 - `scripts/dashboard_server.py`, `zone_map_anchors.py`, `meeting_emissions_attribution.py`, `od_table_names.py`, `popgen_constants.py` — runtime support modules
 - `dashboard/assets/vendor/` — offline Leaflet/Chart.js bundles

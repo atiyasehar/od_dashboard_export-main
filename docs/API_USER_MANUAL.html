@@ -182,6 +182,7 @@
         <li><a href="#zone-sidebar">Zone sidebar</a></li>
         <li><a href="#flows">Incoming flows</a></li>
         <li><a href="#buildings">Buildings</a></li>
+        <li><a href="#transit">Transit overlay</a></li>
         <li><a href="#order">Suggested test order</a></li>
         <li><a href="#troubleshoot">Troubleshooting</a></li>
         <li><a href="#quickref">Quick reference</a></li>
@@ -231,7 +232,7 @@
 
     <h4>curl / PowerShell</h4>
     <p>Paste the full URL (e.g. <code>http://127.0.0.1:5051/api/health</code>) or set a shell variable.</p>
-    <p>Add <strong>zone</strong> and <strong>building</strong> IDs as <strong>query parameters</strong> per request — not in the environment.</p>
+    <p>Add <strong>zone</strong> and <strong>building</strong> IDs as <strong>query parameters</strong> per request — not in the environment. Comma-separated lists (<code>geo_ids</code>, <code>dest_geo_id=562,571</code>, <code>zone_geo_ids</code>) select several zones; KPIs and buildings sum, incoming flows merge (origins inside the selection are dropped).</p>
 
     <h3>Conventions</h3>
     <table>
@@ -256,6 +257,10 @@
         <tr><td><code>max_kg</code></td><td>number</td><td>—</td><td><code>zone_map</code>, <code>building_map</code></td></tr>
         <tr><td><code>building_by</code></td><td><code>rules</code>, <code>dest</code> only</td><td><code>rules</code></td><td><code>building_map</code>, <code>building_detail</code>, <code>building_emission_scale</code></td></tr>
         <tr><td><code>limit</code></td><td>int or <code>all</code></td><td>varies</td><td>Flows, building map, building outlines</td></tr>
+        <tr><td><code>geo_id</code> / <code>geo_ids</code></td><td>one id or comma list</td><td>—</td><td><code>zone_sidebar</code></td></tr>
+        <tr><td><code>dest_geo_id</code> / <code>dest_geo_ids</code></td><td>one id or comma list</td><td>—</td><td><code>zone_incoming_flow</code></td></tr>
+        <tr><td><code>zone_geo_id</code> / <code>zone_geo_ids</code></td><td>one id or comma list</td><td>—</td><td><code>building_map</code>, fabric</td></tr>
+        <tr><td><code>group</code></td><td><code>rail</code>, <code>bus</code></td><td><code>rail</code></td><td><code>transit_network</code></td></tr>
       </tbody>
     </table>
 
@@ -389,19 +394,19 @@
 
     <div class="endpoint" id="api-zone-sidebar">
       <h3><span class="method">GET</span> <span class="path">/api/od/zone_sidebar</span></h3>
-      <p class="purpose"><strong>Purpose:</strong> KPIs and travel-reason breakdown for one selected zone (sidebar on zone click).</p>
+      <p class="purpose"><strong>Purpose:</strong> KPIs and travel-reason breakdown for one or more selected zones. Comma lists are summed; <code>zone_label</code> becomes <code>N zones</code>.</p>
       <table>
         <thead><tr><th>Parameter</th><th>Type</th><th>Required</th><th>Description</th></tr></thead>
         <tbody>
-          <tr><td><code>geo_id</code></td><td>string</td><td><strong>yes</strong></td><td>Zone ID (e.g. <code>562</code>)</td></tr>
+          <tr><td><code>geo_id</code> / <code>geo_ids</code></td><td>string</td><td><strong>yes</strong></td><td>Zone ID, or comma list (e.g. <code>562,571</code>)</td></tr>
           <tr><td><code>zone_by</code></td><td><code>rules</code> | <code>dest</code></td><td>no</td><td>Rules-based or Destination zone (default <code>rules</code>)</td></tr>
           <tr><td><code>dest_geo_id</code></td><td>string</td><td>no</td><td>Alternative name for <code>geo_id</code></td></tr>
         </tbody>
       </table>
       <div class="example-label">Example 1 — <code>zone_by=rules</code></div>
       <pre><code>GET {{ base_url }}/api/od/zone_sidebar?geo_id=562&amp;zone_by=rules</code></pre>
-      <div class="example-label">Example 2 — <code>zone_by=dest</code></div>
-      <pre><code>GET {{ base_url }}/api/od/zone_sidebar?geo_id=562&amp;zone_by=dest</code></pre>
+      <div class="example-label">Example 2 — two zones, summed</div>
+      <pre><code>GET {{ base_url }}/api/od/zone_sidebar?geo_ids=562,571&amp;zone_by=rules</code></pre>
       <p class="resp"><strong>Error 400:</strong> <code>{"error": "geo_id is required"}</code> if missing.</p>
     </div>
 
@@ -409,20 +414,20 @@
 
     <div class="endpoint" id="api-incoming-flow">
       <h3><span class="method">GET</span> <span class="path">/api/od/zone_incoming_flow</span></h3>
-      <p class="purpose"><strong>Purpose:</strong> Top incoming origins for one destination zone + intra-zone summary.</p>
+      <p class="purpose"><strong>Purpose:</strong> Top incoming origins for one or more destination zones. Origins inside the selection are dropped (intra-region, not incoming).</p>
       <table>
         <thead><tr><th>Parameter</th><th>Type</th><th>Required</th><th>Default</th><th>Description</th></tr></thead>
         <tbody>
-          <tr><td><code>dest_geo_id</code></td><td>string</td><td><strong>yes</strong></td><td>—</td><td>Destination zone</td></tr>
+          <tr><td><code>dest_geo_id</code> / <code>dest_geo_ids</code></td><td>string</td><td><strong>yes</strong></td><td>—</td><td>Destination zone, or comma list</td></tr>
           <tr><td><code>zone_by</code></td><td><code>rules</code> | <code>dest</code></td><td>no</td><td><code>rules</code></td><td>Rules-based or Destination zone</td></tr>
           <tr><td><code>limit</code></td><td>int or <code>all</code></td><td>no</td><td><code>10</code></td><td>Max origin zones</td></tr>
         </tbody>
       </table>
       <div class="example-label">Example 1 — top 10 (default)</div>
       <pre><code>GET {{ base_url }}/api/od/zone_incoming_flow?dest_geo_id=562</code></pre>
-      <div class="example-label">Example 2 — <code>zone_by=dest</code>, top 25</div>
-      <pre><code>GET {{ base_url }}/api/od/zone_incoming_flow?dest_geo_id=562&amp;zone_by=dest&amp;limit=25</code></pre>
-      <p class="resp"><strong>Response:</strong> <code>flows[]</code>, <code>dest_zone_trips</code>, <code>intra_zone</code>, <code>dest_lat</code>, <code>dest_lon</code>.</p>
+      <div class="example-label">Example 2 — two destinations, merged</div>
+      <pre><code>GET {{ base_url }}/api/od/zone_incoming_flow?dest_geo_id=562,571&amp;limit=25</code></pre>
+      <p class="resp"><strong>Response:</strong> <code>flows[]</code>, <code>dest_geo_ids</code>, <code>dest_zone_trips</code>, <code>intra_zone</code>, <code>dest_lat</code>, <code>dest_lon</code>.</p>
     </div>
 
     <div class="endpoint" id="api-incoming-flows-all">
@@ -455,11 +460,11 @@
 
     <div class="endpoint" id="api-building-map">
       <h3><span class="method">GET</span> <span class="path">/api/od/building_map</span></h3>
-      <p class="purpose"><strong>Purpose:</strong> Buildings with emissions inside a zone.</p>
+      <p class="purpose"><strong>Purpose:</strong> Buildings with emissions inside one or more zones.</p>
       <table>
         <thead><tr><th>Parameter</th><th>Type</th><th>Default</th><th>Description</th></tr></thead>
         <tbody>
-          <tr><td><code>zone_geo_id</code></td><td>string</td><td>—</td><td><strong>Required</strong> for data</td></tr>
+          <tr><td><code>zone_geo_id</code> / <code>zone_geo_ids</code></td><td>string</td><td>—</td><td><strong>Required</strong> for data (comma list ok)</td></tr>
           <tr><td><code>building_by</code></td><td><code>rules</code> | <code>dest</code></td><td><code>rules</code></td><td>Rules-based or Destination zone</td></tr>
           <tr><td><code>min_kg</code></td><td>float</td><td><code>0</code></td><td>Emissions floor (kg)</td></tr>
           <tr><td><code>max_kg</code></td><td>float</td><td>—</td><td>Emissions ceiling (kg)</td></tr>
@@ -471,8 +476,8 @@
       </table>
       <div class="example-label">Example 1 — <code>building_by=rules</code>, zone 562</div>
       <pre><code>GET {{ base_url }}/api/od/building_map?zone_geo_id=562&amp;building_by=rules&amp;limit=500</code></pre>
-      <div class="example-label">Example 2 — <code>building_by=dest</code>, zone 562</div>
-      <pre><code>GET {{ base_url }}/api/od/building_map?zone_geo_id=562&amp;building_by=dest&amp;min_kg=1&amp;limit=100</code></pre>
+      <div class="example-label">Example 2 — two zones</div>
+      <pre><code>GET {{ base_url }}/api/od/building_map?zone_geo_ids=562,571&amp;limit=500</code></pre>
     </div>
 
     <div class="endpoint" id="api-building-fabric">
@@ -513,14 +518,33 @@
       <pre><code>GET {{ base_url }}/api/od/building_detail?building_id=123456&amp;building_by=dest</code></pre>
     </div>
 
+    <h2 id="transit">Transit overlay</h2>
+    <div class="endpoint" id="api-transit">
+      <h3><span class="method">GET</span> <span class="path">/api/od/transit_network</span></h3>
+      <p class="purpose"><strong>Purpose:</strong> STM / REM / exo lines and stops from official GTFS. No API key. Cached in <code>data/cache/</code>.</p>
+      <table>
+        <thead><tr><th>Parameter</th><th>Type</th><th>Default</th><th>Description</th></tr></thead>
+        <tbody>
+          <tr><td><code>group</code></td><td><code>rail</code> | <code>bus</code></td><td><code>rail</code></td><td>Metro + REM + trains, or STM buses</td></tr>
+          <tr><td><code>refresh</code></td><td><code>0</code> | <code>1</code></td><td><code>0</code></td><td>Force a GTFS rebuild</td></tr>
+        </tbody>
+      </table>
+      <div class="example-label">Example 1 — rail</div>
+      <pre><code>GET {{ base_url }}/api/od/transit_network?group=rail</code></pre>
+      <div class="example-label">Example 2 — bus</div>
+      <pre><code>GET {{ base_url }}/api/od/transit_network?group=bus</code></pre>
+      <p class="resp"><strong>Response:</strong> <code>geojson</code>, <code>stops</code>, <code>source: "gtfs"</code>. <strong>503</strong> if GTFS cannot be fetched and there is no cache.</p>
+    </div>
+
     <h2 id="order">7. Suggested test order</h2>
     <ol>
       <li><code>GET {{ base_url }}/api/health</code></li>
       <li><code>GET {{ base_url }}/api/od/zone_map?zone_by=dest&amp;include_geojson=0</code></li>
-      <li><code>GET {{ base_url }}/api/od/zone_sidebar?geo_id=562&amp;zone_by=rules</code></li>
+      <li><code>GET {{ base_url }}/api/od/zone_sidebar?geo_ids=562,571&amp;zone_by=rules</code></li>
       <li><code>GET {{ base_url }}/api/od/zone_incoming_flow?dest_geo_id=562&amp;limit=10</code></li>
       <li><code>GET {{ base_url }}/api/od/building_map?zone_geo_id=562&amp;limit=50</code></li>
       <li><code>GET {{ base_url }}/api/od/zones_boundary?island_only=0</code></li>
+      <li><code>GET {{ base_url }}/api/od/transit_network?group=rail</code></li>
     </ol>
 
     <h2 id="troubleshoot">8. Troubleshooting</h2>
@@ -533,7 +557,8 @@
         <tr><td><code>503 missing_table</code></td><td>Restore DB dump into <code>od_dashboard</code> (see <a href="DASHBOARD_USER_MANUAL.md">Dashboard User Manual</a>; dump filename may vary)</td></tr>
         <tr><td>Empty zones or flows</td><td>Try <code>zone_by=dest</code> if you used <code>rules</code>, or vice versa</td></tr>
         <tr><td>Slow / huge response</td><td><code>include_geojson=0</code>; add <code>limit</code></td></tr>
-        <tr><td><code>400 geo_id required</code></td><td>Add <code>geo_id</code> or <code>dest_geo_id</code></td></tr>
+        <tr><td><code>400 geo_id required</code></td><td>Add <code>geo_id</code> / <code>geo_ids</code> or <code>dest_geo_id</code></td></tr>
+        <tr><td><code>503 transit_unavailable</code></td><td>First GTFS fetch failed and <code>data/cache/</code> is empty — retry online</td></tr>
       </tbody>
     </table>
 
@@ -548,11 +573,15 @@
         <tr><td>Zone map</td><td><code>{{ base_url }}/api/od/zone_map?zone_by=dest&amp;include_geojson=0</code></td></tr>
         <tr><td>Both zone maps</td><td><code>{{ base_url }}/api/od/zone_maps?include_geojson=0</code></td></tr>
         <tr><td>Zone sidebar</td><td><code>{{ base_url }}/api/od/zone_sidebar?geo_id=562&amp;zone_by=rules</code></td></tr>
+        <tr><td>Zone sidebar (multi)</td><td><code>{{ base_url }}/api/od/zone_sidebar?geo_ids=562,571</code></td></tr>
         <tr><td>Incoming flows</td><td><code>{{ base_url }}/api/od/zone_incoming_flow?dest_geo_id=562&amp;limit=10</code></td></tr>
+        <tr><td>Incoming flows (multi)</td><td><code>{{ base_url }}/api/od/zone_incoming_flow?dest_geo_id=562,571&amp;limit=10</code></td></tr>
         <tr><td>All flows (bulk)</td><td><code>{{ base_url }}/api/od/zone_incoming_flows_all?limit=5</code></td></tr>
         <tr><td>Building scale</td><td><code>{{ base_url }}/api/od/building_emission_scale?building_by=rules</code></td></tr>
         <tr><td>Buildings in zone</td><td><code>{{ base_url }}/api/od/building_map?zone_geo_id=562&amp;limit=500</code></td></tr>
         <tr><td>Zone building outlines</td><td><code>{{ base_url }}/api/od/zone_building_fabric?zone_geo_id=562</code></td></tr>
+        <tr><td>Transit (rail)</td><td><code>{{ base_url }}/api/od/transit_network?group=rail</code></td></tr>
+        <tr><td>Transit (bus)</td><td><code>{{ base_url }}/api/od/transit_network?group=bus</code></td></tr>
         <tr><td>One footprint</td><td><code>{{ base_url }}/api/od/building_footprint?building_id=...</code></td></tr>
         <tr><td>Building KPIs</td><td><code>{{ base_url }}/api/od/building_detail?building_id=...&amp;building_by=rules</code></td></tr>
       </tbody>

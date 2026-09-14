@@ -61,7 +61,7 @@ Use `{{ base_url }}/api/...` in every request below.
 
 Paste the full URL (e.g. `http://127.0.0.1:5051/api/health`) or set a shell variable.
 
-Add **zone** and **building** IDs as **query parameters** per request (`geo_id`, `dest_geo_id`, `zone_geo_id`, `building_id`) — not in the environment.
+Add **zone** and **building** IDs as **query parameters** per request (`geo_id` / `geo_ids`, `dest_geo_id` / `dest_geo_ids`, `zone_geo_id` / `zone_geo_ids`, `building_id`) — not in the environment. Comma-separated lists select several zones at once; the server sums KPIs and buildings and merges incoming flows (origins inside the selection are dropped).
 
 ### Conventions
 
@@ -86,6 +86,10 @@ These appear on several endpoints:
 | `max_kg` | number | *(none)* | `zone_map`, `building_map` |
 | `building_by` | **`rules`** or **`dest`** only | `rules` | `building_map`, `building_detail`, `building_emission_scale` |
 | `limit` | integer, or `all` | varies | Flows, building map, building outlines |
+| `geo_id` / `geo_ids` | one id, or comma-separated | — | `zone_sidebar` (at least one required) |
+| `dest_geo_id` / `dest_geo_ids` | one id, or comma-separated | — | `zone_incoming_flow` |
+| `zone_geo_id` / `zone_geo_ids` | one id, or comma-separated | — | `building_map`, `zone_building_fabric` |
+| `group` | `rail` or `bus` | `rail` | `transit_network` |
 
 ### `zone_by` and `building_by` — spell `rules` or `dest` in the URL
 
@@ -314,18 +318,48 @@ GET {{ base_url }}/api/od/flows_zones?zone_by=rules
 
 ---
 
+### `GET /api/od/transit_network`
+
+**Purpose:** Montreal public-transport overlay used by the map control (STM, REM, exo). Built from official GTFS — **no API key**. Cached under `data/cache/` (7 days). First call can take a while if the zips are not cached yet.
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `group` | `rail` \| `bus` | `rail` | Metro + REM + exo trains, or STM buses |
+| `refresh` | `0` \| `1` | `0` | Force a GTFS rebuild |
+
+#### Example 1 — rail (metro, REM, trains)
+
+```http
+GET {{ base_url }}/api/od/transit_network?group=rail
+```
+
+#### Example 2 — buses
+
+```http
+GET {{ base_url }}/api/od/transit_network?group=bus
+```
+
+**Response:** `{ "geojson": FeatureCollection, "stops": FeatureCollection, "feature_count", "stop_count", "source": "gtfs", "attribution": "STM, REM, exo", "group": "rail"|"bus" }`.
+
+**Error:** `503` `{ "error": "transit_unavailable" }` if GTFS cannot be fetched and there is no cache.
+
+---
+
 ## 4. Zone sidebar (KPIs / charts)
 
 ### `GET /api/od/zone_sidebar`
 
-**Purpose:** KPIs and travel-reason breakdown for **one selected zone** (sidebar refresh on zone click).
+**Purpose:** KPIs and travel-reason breakdown for **one or more** selected zones (sidebar refresh on zone click). Pass several ids as a comma list; `stats` and `by_category` are summed. `zone_label` becomes `"N zones"` when more than one id is sent.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `geo_id` | string | **yes** | Zone `geo_id` (e.g. `562`) |
+| `geo_id` | string | **yes*** | Zone `geo_id` (e.g. `562`). Comma list is fine. |
+| `geo_ids` | string | no | Same as `geo_id` (UI uses this for multi-select) |
 | `zone_by` | `rules` \| `dest` | no | Rules-based or Destination zone (default `rules`) |
 | `dest_geo_id` | string | no | Alternative name for `geo_id` |
 | `attribution` | string | no | Alternative name for `zone_by` |
+
+\* At least one of `geo_id`, `geo_ids`, `dest_geo_id`, `dest_geo_ids`.
 
 #### Example 1 — `zone_by=rules`
 
@@ -340,15 +374,15 @@ GET {{ base_url }}/api/od/zone_sidebar?geo_id=562&zone_by=rules
 | `geo_id` | `562` |
 | `zone_by` | `rules` |
 
-#### Example 2 — `zone_by=dest`
+#### Example 2 — two zones, summed
 
 ```http
-GET {{ base_url }}/api/od/zone_sidebar?geo_id=562&zone_by=dest
+GET {{ base_url }}/api/od/zone_sidebar?geo_ids=562,571&zone_by=rules
 ```
 
-**Response:** `{ "geo_id": "562", "zone_label": "...", "stats": { "trips": ..., "total_emissions_g": ... }, "by_category": [...] }`.
+**Response:** `{ "geo_id": "562", "geo_ids": ["562", "571"], "zone_count": 2, "zone_label": "2 zones", "stats": { "trips": ..., "total_emissions_g": ... }, "by_category": [...] }`.
 
-**Error:** `400` if `geo_id` is missing: `{"error": "geo_id is required"}`.
+**Error:** `400` if no zone id is given: `{"error": "geo_id is required"}`.
 
 ---
 
@@ -356,13 +390,16 @@ GET {{ base_url }}/api/od/zone_sidebar?geo_id=562&zone_by=dest
 
 ### `GET /api/od/zone_incoming_flow`
 
-**Purpose:** Top incoming origin zones for one **destination** zone, plus destination KPIs and intra-zone summary. Powers the **flows** map arcs and table.
+**Purpose:** Top incoming origin zones for one or more **destination** zones, plus destination KPIs and intra-zone summary. Powers the **flows** map arcs and table. Several dest ids are merged: origins that sit inside the selection are dropped (they are intra-region, not incoming).
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
-| `dest_geo_id` | string | **yes** | — | Destination zone |
+| `dest_geo_id` | string | **yes*** | — | Destination zone, or comma-separated list |
+| `dest_geo_ids` | string | no | — | Same as `dest_geo_id` |
 | `zone_by` | `rules` \| `dest` | no | `rules` | Rules-based or Destination zone |
 | `limit` | int or `all` | no | `10` | Max origin zones (`all` = no cap, max 500) |
+
+\* At least one of `dest_geo_id`, `dest_geo_ids`.
 
 #### Example 1 — top 10 incoming flows (default)
 
@@ -376,15 +413,15 @@ GET {{ base_url }}/api/od/zone_incoming_flow?dest_geo_id=562
 |------|-------|
 | `dest_geo_id` | `562` |
 
-#### Example 2 — `zone_by=dest`, top 25
+#### Example 2 — two destinations, merged
 
 ```http
-GET {{ base_url }}/api/od/zone_incoming_flow?dest_geo_id=562&zone_by=dest&limit=25
+GET {{ base_url }}/api/od/zone_incoming_flow?dest_geo_id=562,571&limit=25
 ```
 
-**Response (key fields):** `flows[]` (orig_geo_id, trips, emissions, lat/lon), `dest_zone_trips`, `intra_zone`, `total_incoming_trips`, `dest_lat`, `dest_lon`.
+**Response (key fields):** `flows[]` (orig_geo_id, trips, emissions, lat/lon), `dest_geo_ids`, `dest_zone_trips`, `intra_zone`, `total_incoming_trips`, `dest_lat`, `dest_lon`. With several dests, `zone_label` is `"N zones"`.
 
-**Error:** `400` if `dest_geo_id` missing.
+**Error:** `400` if no destination id is given.
 
 ---
 
@@ -450,11 +487,12 @@ GET {{ base_url }}/api/od/building_emission_scale?building_by=dest
 
 ### `GET /api/od/building_map`
 
-**Purpose:** Buildings with emissions inside a zone (points or grid clusters; optional footprints).
+**Purpose:** Buildings with emissions inside one or more zones (points or grid clusters; optional footprints).
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `zone_geo_id` | string | — | **Required** for data (empty → empty list + hint) |
+| `zone_geo_id` | string | — | **Required** for data (empty → empty list + hint). Comma list ok. |
+| `zone_geo_ids` | string | — | Same as `zone_geo_id` |
 | `building_by` | `rules` \| `dest` | `rules` | Rules-based or Destination zone |
 | `min_kg` | float | `0` | Emissions floor (kg) |
 | `max_kg` | float | *(none)* | Emissions ceiling (kg) |
@@ -477,13 +515,13 @@ GET {{ base_url }}/api/od/building_map?zone_geo_id=562&building_by=rules&limit=5
 | `building_by` | `rules` |
 | `limit` | `500` |
 
-#### Example 2 — `building_by=dest`, zone 562
+#### Example 2 — two zones
 
 ```http
-GET {{ base_url }}/api/od/building_map?zone_geo_id=562&building_by=dest&min_kg=1&limit=100
+GET {{ base_url }}/api/od/building_map?zone_geo_ids=562,571&building_by=rules&limit=500
 ```
 
-**Response:** `{ "buildings": [...], "zone_geo_id": "562", "truncated": false, "metrics_mode": "weighted" }`.
+**Response:** `{ "buildings": [...], "zone_geo_id": "562,571", "truncated": false, "metrics_mode": "weighted" }`.
 
 ---
 
@@ -493,7 +531,7 @@ GET {{ base_url }}/api/od/building_map?zone_geo_id=562&building_by=dest&min_kg=1
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
-| `zone_geo_id` | string | **yes** | — | Zone to load |
+| `zone_geo_id` | string | **yes** | — | Zone(s) to load (comma list or `zone_geo_ids`) |
 | `limit` | int | no | `50000` | Max footprints |
 
 #### Example 1
@@ -577,10 +615,11 @@ Run these in order when validating a fresh install:
 
 1. `GET {{ base_url }}/api/health`
 2. `GET {{ base_url }}/api/od/zone_map?zone_by=dest&include_geojson=0`
-3. `GET {{ base_url }}/api/od/zone_sidebar?geo_id=562&zone_by=rules`
+3. `GET {{ base_url }}/api/od/zone_sidebar?geo_ids=562,571&zone_by=rules`
 4. `GET {{ base_url }}/api/od/zone_incoming_flow?dest_geo_id=562&limit=10`
 5. `GET {{ base_url }}/api/od/building_map?zone_geo_id=562&limit=50`
 6. `GET {{ base_url }}/api/od/zones_boundary?island_only=0`
+7. `GET {{ base_url }}/api/od/transit_network?group=rail`
 
 ---
 
@@ -594,7 +633,8 @@ Run these in order when validating a fresh install:
 | `503 missing_table` | Restore DB dump into `od_dashboard` (see Dashboard User Manual; dump filename may vary) |
 | Empty `zones` or `flows` | Try `zone_by=dest` if you used `rules`, or the other way around |
 | Huge slow response | Set `include_geojson=0` on map endpoints; add `limit` on flows/buildings |
-| `400 geo_id required` | Add `geo_id` or `dest_geo_id` query parameter |
+| `400 geo_id required` | Add `geo_id` / `geo_ids` or `dest_geo_id` |
+| `503 transit_unavailable` | First GTFS fetch failed and `data/cache/` is empty — retry online |
 
 ---
 
@@ -609,10 +649,14 @@ Run these in order when validating a fresh install:
 | Zone map | `{{ base_url }}/api/od/zone_map?zone_by=dest&include_geojson=0` |
 | Both zone maps | `{{ base_url }}/api/od/zone_maps?include_geojson=0` |
 | Zone sidebar | `{{ base_url }}/api/od/zone_sidebar?geo_id=562&zone_by=rules` |
+| Zone sidebar (multi) | `{{ base_url }}/api/od/zone_sidebar?geo_ids=562,571` |
 | Incoming flows | `{{ base_url }}/api/od/zone_incoming_flow?dest_geo_id=562&limit=10` |
+| Incoming flows (multi) | `{{ base_url }}/api/od/zone_incoming_flow?dest_geo_id=562,571&limit=10` |
 | All flows (bulk) | `{{ base_url }}/api/od/zone_incoming_flows_all?limit=5` |
 | Building scale | `{{ base_url }}/api/od/building_emission_scale?building_by=rules` |
 | Buildings in zone | `{{ base_url }}/api/od/building_map?zone_geo_id=562&limit=500` |
 | Zone building outlines | `{{ base_url }}/api/od/zone_building_fabric?zone_geo_id=562` |
+| Transit (rail) | `{{ base_url }}/api/od/transit_network?group=rail` |
+| Transit (bus) | `{{ base_url }}/api/od/transit_network?group=bus` |
 | One footprint | `{{ base_url }}/api/od/building_footprint?building_id=...` |
 | Building KPIs | `{{ base_url }}/api/od/building_detail?building_id=...&building_by=rules` |
