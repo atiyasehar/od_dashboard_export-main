@@ -23,6 +23,11 @@ Thumbs.db
 data/db/*.dump
 *.dump
 
+# Tests
+.pytest_cache/
+.coverage
+htmlcov/
+
 # Logs / temp
 *.log
 *.tmp

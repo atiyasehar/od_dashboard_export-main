@@ -328,6 +328,29 @@ ORDER BY table_name;
 
 ---
 
+## Automated tests
+
+Regression suite for helpers, map assets, Flask pages, and `/api/od/*` endpoints. Database checks skip automatically when PostgreSQL is not reachable; transit overlay skips if GTFS cache/download is unavailable.
+
+```powershell
+pip install -r requirements.txt
+python -m pytest tests
+# or: python scripts/run_tests.py
+```
+
+Linux / macOS: `python3 -m pytest tests`
+
+Frontend helper tests (`tests/test_zone_ui_js.py`) skip unless `node` is on PATH. All other tests are Python-only.
+
+Useful filters:
+
+```powershell
+python -m pytest tests -k "not TestOdApis"   # unit + static only
+python -m pytest tests -k transit            # transit overlay
+```
+
+---
+
 ## Configuration reference
 
 All settings: **`deploy.env`**, environment variables, or CLI flags on `run_dashboard.py`. CLI flags override env.
@@ -583,6 +606,7 @@ Get-NetTCPConnection -LocalPort $env:PORT -State Listen | ForEach-Object {
 - `dashboard/` — SPA + map views
 - `scripts/run_dashboard.py` — API server
 - `scripts/start_dashboard.ps1` / `start_dashboard.sh` — load `deploy.env` and run
+- `scripts/run_tests.py` / `tests/` — pytest unit and API regression suite
 - `scripts/dashboard_server.py`, `zone_map_anchors.py`, `meeting_emissions_attribution.py`, `od_table_names.py`, `popgen_constants.py` — runtime support modules
 - `dashboard/assets/vendor/` — offline Leaflet/Chart.js bundles
 - `data/db/` — dump location
