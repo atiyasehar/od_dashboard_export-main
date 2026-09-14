@@ -269,7 +269,7 @@
 
     <!-- UI WIREFRAME -->
     <h2 id="ui">Dashboard views (UI)</h2>
-    <p>The home page is a <strong>single-page app</strong> (<code>od-dashboard.html</code>) with a fixed header and left sidebar. Map views load in iframes.</p>
+    <p>The home page is a <strong>single-page app</strong> (<code>od-dashboard.html</code>) with a fixed header and left sidebar. Map views load in iframes. Click a zone to select it; <strong>Ctrl/Cmd</strong> or <strong>Shift</strong> click adds or removes zones — KPIs, buildings, and incoming flows sum across the selection. Street tiles are OpenStreetMap (dimmed, no API key). Bottom-left <strong>Transit overlay</strong> draws STM metro, REM, exo trains, and STM buses from official GTFS.</p>
 
     <figure class="fig">
       <figcaption>Figure 2 — Zone maps view (sidebar KPIs, travel-reason chart, CO₂ filters, island choropleth). Open <code>http://127.0.0.1:&lt;PORT&gt;/</code> after starting the server.</figcaption>
@@ -278,10 +278,10 @@
     <table>
       <thead><tr><th>Tab</th><th>URL</th><th>What it shows</th></tr></thead>
       <tbody>
-        <tr><td><strong>Zone maps</strong></td><td><code>/?view=zones</code></td><td>Island zone choropleth · emissions by travel zone</td></tr>
-        <tr><td><strong>Buildings</strong></td><td><code>/?view=buildings</code></td><td>Click a zone → building footprints &amp; emissions</td></tr>
-        <tr><td><strong>Flows</strong></td><td><code>/?view=flows</code></td><td>Incoming OD flows by destination zone</td></tr>
-        <tr><td><strong>Boundaries</strong></td><td><code>/od-zones-boundary.html</code></td><td>Island / CMM boundary explorer</td></tr>
+        <tr><td><strong>Zone maps</strong></td><td><code>/?view=zones</code></td><td>Island zone choropleth · Ctrl/Cmd+click to add zones</td></tr>
+        <tr><td><strong>Buildings</strong></td><td><code>/?view=buildings</code></td><td>Select zone(s) → building footprints &amp; emissions</td></tr>
+        <tr><td><strong>Flows</strong></td><td><code>/?view=flows</code></td><td>Incoming OD flows for one or more destinations</td></tr>
+        <tr><td><strong>Boundaries</strong></td><td><code>/od-zones-boundary.html</code></td><td>Island / CMM boundary explorer + transit overlay</td></tr>
       </tbody>
     </table>
 
@@ -441,12 +441,12 @@ ORDER BY table_name;</code></pre>
 python -m venv .venv
 .venv\Scripts\activate
 pip install -r requirements.txt</code></pre>
-    <p>Packages: <code>Flask</code>, <code>flask-cors</code>, <code>psycopg2-binary</code>. See <code>requirements.txt</code>.</p>
+    <p>Packages: <code>Flask</code>, <code>flask-cors</code>, <code>psycopg2-binary</code>, <code>pytest</code>. See <code>requirements.txt</code>. After install: <code>python -m pytest tests</code>.</p>
 
     <h2 id="run">Start the server</h2>
-    <p><strong>Local (default)</strong> — app at site root, API under <code>/api</code>:</p>
-    <pre><code>python scripts/run_dashboard.py --bundle-root . --db-name od_dashboard</code></pre>
-    <p>Other PostgreSQL settings use your environment or standard libpq defaults. Run <code>python scripts/run_dashboard.py --help</code> for all flags.</p>
+    <p><strong>Local (default)</strong> — app at site root, API under <code>/api</code>. Copy <code>deploy.example.env</code> → <code>deploy.env</code> first (Postgres port, password, HTTP <code>PORT</code> — example HTTP port is 5051).</p>
+    <pre><code>python scripts/run_dashboard.py --bundle-root .</code></pre>
+    <p>On Windows you can also run <code>powershell -ExecutionPolicy Bypass -File .\scripts\start_dashboard.ps1</code> if PowerShell blocks the unsigned start script. Other PostgreSQL settings come from <code>deploy.env</code>. Run <code>python scripts/run_dashboard.py --help</code> for all flags.</p>
 
     <table>
       <thead><tr><th>Flag</th><th>Suggested value</th><th>Description</th></tr></thead>
@@ -474,15 +474,15 @@ pip install -r requirements.txt</code></pre>
     <p>The health response includes a <code>deploy</code> object confirming <code>url_prefix</code>, <code>api_prefix</code>, and <code>show_boundary_button</code>.</p>
 
     <div class="card warn">
-      <p><strong>Kill stale server</strong> if port 5051 is stuck on old code:</p>
+      <p><strong>Kill a stale server</strong> if your HTTP <code>PORT</code> (example 5051) is stuck on old code:</p>
       <pre><code>Get-NetTCPConnection -LocalPort 5051 -ErrorAction SilentlyContinue |
   ForEach-Object { Stop-Process -Id $_.OwningProcess -Force }</code></pre>
     </div>
 
     <h2 id="verify">Verify &amp; open browser</h2>
     <ol class="steps">
-      <li>Open <a href="http://127.0.0.1:5051/api/health">http://127.0.0.1:5051/api/health</a> — expect <code>"ok": true</code>, <code>"schema": "public"</code>.</li>
-      <li>Open <a href="http://127.0.0.1:5051/">http://127.0.0.1:5051/</a> — SPA with sidebar KPIs and map.</li>
+      <li>Open <code>http://127.0.0.1:&lt;PORT&gt;/api/health</code> (PORT from <code>deploy.env</code>, example 5051) — expect <code>"ok": true</code>, <code>"schema": "public"</code>.</li>
+      <li>Open <code>http://127.0.0.1:&lt;PORT&gt;/</code> — SPA with sidebar KPIs and map. Click a zone; Ctrl/Cmd+click to add more. Transit overlay is bottom-left.</li>
       <li>Hard-refresh after code updates: <strong>Ctrl+Shift+R</strong>.</li>
       <li>On another PC on your LAN: <code>http://YOUR_IP:5051/</code> (Windows Firewall may prompt).</li>
     </ol>
@@ -502,9 +502,9 @@ pip install -r requirements.txt</code></pre>
     <h2 id="portable">Move to another machine / refresh dump</h2>
     <p>Copy the entire <code>od_dashboard_export-main/</code> folder. On the target machine: PostgreSQL + PostGIS, restore <code>data/db/od_dashboard_tables.dump</code>, <code>pip install -r requirements.txt</code>, run <code>run_dashboard.py</code>.</p>
     <p>After updating precomputed tables on a dev PC (e.g. new <code>building_emissions_od10</code> from PopGen), re-create the dump so the bundle stays portable:</p>
-    <pre><code>pg_dump -h localhost -p 5432 -U postgres -d od_dashboard -Fc --no-owner --no-acl ^
+    <pre><code>pg_dump -h localhost -p %PGPORT% -U postgres -d od_dashboard -Fc --no-owner --no-acl ^
   -f data\db\od_dashboard_tables.dump</code></pre>
-    <p>Row counts and table list: see <code>manifest.json</code> in the bundle root.</p>
+    <p>Use <code>PGHOST</code> / <code>PGPORT</code> from <code>deploy.env</code> (this machine’s Postgres is often not 5432). Row counts and table list: see <code>manifest.json</code> in the bundle root.</p>
 
     <h2 id="api">API endpoints (selection)</h2>
     <p>Paths below use the default <code>/api</code> prefix. With <code>--api-prefix /od-dashboard-api</code>, prepend that instead (and include <code>--url-prefix</code> when mounted under a subpath).</p>
@@ -513,10 +513,11 @@ pip install -r requirements.txt</code></pre>
       <tbody>
         <tr><td><code>GET /api/health</code></td><td>Server + DB connectivity check (includes <code>deploy</code> settings)</td></tr>
         <tr><td><code>GET /api/od/home</code></td><td>Island KPIs + sidebar charts data</td></tr>
-        <tr><td><code>GET /api/od/zone_sidebar</code></td><td>Zone KPIs + charts on zone click</td></tr>
+        <tr><td><code>GET /api/od/zone_sidebar</code></td><td>Zone KPIs + charts; <code>geo_ids=</code> for multi-select (summed)</td></tr>
         <tr><td><code>GET /api/od/zone_maps</code></td><td>Zone choropleth GeoJSON</td></tr>
-        <tr><td><code>GET /api/od/building_map</code></td><td>Buildings for selected zone</td></tr>
-        <tr><td><code>GET /api/od/flows</code></td><td>Incoming flows for destination zone</td></tr>
+        <tr><td><code>GET /api/od/building_map</code></td><td>Buildings for selected zone(s) (<code>zone_geo_id</code> / <code>zone_geo_ids</code>)</td></tr>
+        <tr><td><code>GET /api/od/zone_incoming_flow</code></td><td>Incoming flows; comma <code>dest_geo_id</code> merges destinations</td></tr>
+        <tr><td><code>GET /api/od/transit_network</code></td><td>STM / REM / exo GTFS overlay (<code>group=rail</code> or <code>bus</code>)</td></tr>
       </tbody>
     </table>
 
@@ -548,11 +549,13 @@ pip install -r requirements.txt</code></pre>
       <li><strong>503 “No OD10 zone table found”</strong> — Run restore; confirm the database name is <code>od_dashboard</code>.</li>
       <li><strong><code>pg_restore</code> not found</strong> — Add PostgreSQL <code>bin</code> to PATH.</li>
       <li><strong>UI looks old after update</strong> — Ctrl+Shift+R or incognito window.</li>
+      <li><strong>PowerShell: script is not digitally signed</strong> — <code>powershell -ExecutionPolicy Bypass -File .\scripts\start_dashboard.ps1</code> or run <code>python scripts/run_dashboard.py --bundle-root .</code>.</li>
+      <li><strong>Transit overlay empty</strong> — first load downloads GTFS (no API key). Needs the network once; later runs use <code>data/cache/</code>.</li>
     </ul>
 
     <h2 id="layout">Folder layout</h2>
     <figure class="fig">
-      <svg viewBox="0 0 400 320" width="400" height="320" xmlns="http://www.w3.org/2000/svg" font-family="Consolas, monospace" font-size="11">
+      <svg viewBox="0 0 400 360" width="400" height="360" xmlns="http://www.w3.org/2000/svg" font-family="Consolas, monospace" font-size="11">
         <text x="20" y="24" fill="#5eead4">od_dashboard_export-main/</text>
         <text x="30" y="44" fill="#e8eef7">├── README.html</text>
         <text x="30" y="62" fill="#e8eef7">├── manifest.json</text>
@@ -564,17 +567,19 @@ pip install -r requirements.txt</code></pre>
         <text x="30" y="170" fill="#38bdf8">├── scripts/</text>
         <text x="50" y="188" fill="#8b9cb8">├── run_dashboard.py ★</text>
         <text x="50" y="206" fill="#8b9cb8">├── start_dashboard.ps1 / .sh</text>
-        <text x="50" y="224" fill="#8b9cb8">└── dashboard_server.py + helpers</text>
-        <text x="30" y="242" fill="#38bdf8">├── docs/</text>
-        <text x="30" y="260" fill="#38bdf8">└── data/</text>
-        <text x="50" y="278" fill="#fbbf24">├── db/od_dashboard_tables.dump</text>
-        <text x="50" y="296" fill="#8b9cb8">└── mtl_boundary_file.geojson</text>
+        <text x="50" y="224" fill="#8b9cb8">├── transit_overlay.py</text>
+        <text x="50" y="242" fill="#8b9cb8">└── dashboard_server.py + helpers</text>
+        <text x="30" y="260" fill="#38bdf8">├── tests/  pytest</text>
+        <text x="30" y="278" fill="#38bdf8">├── docs/</text>
+        <text x="30" y="296" fill="#38bdf8">└── data/</text>
+        <text x="50" y="314" fill="#fbbf24">├── db/od_dashboard_tables.dump</text>
+        <text x="50" y="332" fill="#8b9cb8">└── mtl_boundary_file.geojson</text>
       </svg>
       <figcaption>Figure 7 — Project folder tree.</figcaption>
     </figure>
 
     <div class="footer">
-      <p>Export bundle · PM23 OD survey · Updated 2026-06-23</p>
+      <p>Export bundle · PM23 OD survey · Updated 2026-09-14</p>
       <p>Open this file in any browser: <code>README.html</code></p>
     </div>
   </div>
