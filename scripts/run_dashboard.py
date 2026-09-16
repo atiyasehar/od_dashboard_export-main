@@ -3521,12 +3521,11 @@ if __name__ == "__main__":
     )
     ap.add_argument(
         "--url-prefix",
-        default=os.environ.get("DASH_URL_PREFIX") or os.environ.get("DEPLOYMENT_URL_NAME", ""),
+        default=os.environ.get("DASH_URL_PREFIX"),
         help=(
             "URL mount prefix behind a reverse proxy (e.g. /montreal-traffic-emissions-dashboard). "
             "Also drives the <base href> tag auto-injected into every dashboard page, so it never "
-            "needs to be hand-edited before a deploy. DEPLOYMENT_URL_NAME (bare name, no slashes) "
-            "is accepted as an alias."
+            "needs to be hand-edited before a deploy."
         ),
     )
     ap.add_argument(
