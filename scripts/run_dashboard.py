@@ -3331,8 +3331,8 @@ def _rewrite_html_for_offline(html: str) -> str:
         html = html.replace(old, new)
     if "dashboard-offline.css" not in html:
         html = html.replace(
-            "<head>",
-            '<head>\n  <link rel="stylesheet" href="assets/dashboard-offline.css" />',
+            "</head>",
+            '<link rel="stylesheet" href="assets/dashboard-offline.css" /> \n </head>',
             1,
         )
     return html
