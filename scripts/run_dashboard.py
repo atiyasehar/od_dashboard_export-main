@@ -3308,6 +3308,17 @@ def _deploy_inline_script() -> str:
     return f"<script>window.__dashDeploy={cfg};</script>\n  "
 
 
+def _base_href_tag() -> str:
+    """<base href> for the configured mount prefix (DASH_URL_PREFIX / DEPLOYMENT_URL_NAME).
+
+    Lets every dashboard page resolve relative assets/API calls correctly when
+    served behind a reverse-proxy subpath, without hand-editing the exported
+    HTML on each deploy.
+    """
+    up = DEPLOY["url_prefix"]
+    return f'<base href="{up}/">' if up else ""
+
+
 def _rewrite_html_for_offline(html: str) -> str:
     """Swap CDN assets for bundled vendor files; drop Google Fonts."""
     html = re.sub(r"\s*<link[^>]*fonts\.(googleapis|gstatic)\.com[^>]*>\s*", "\n", html, flags=re.I)
@@ -3331,8 +3342,8 @@ def _rewrite_html_for_offline(html: str) -> str:
         html = html.replace(old, new)
     if "dashboard-offline.css" not in html:
         html = html.replace(
-            "<head>",
-            '<head>\n  <link rel="stylesheet" href="assets/dashboard-offline.css" />',
+            "</head>",
+            '<link rel="stylesheet" href="assets/dashboard-offline.css" /> \n </head>',
             1,
         )
     return html
@@ -3344,6 +3355,10 @@ def _serve_html_page(filename: str):
     if not path.is_file():
         return f"<p>{filename} not found.</p>", 404
     html = path.read_text(encoding="utf-8")
+    html = re.sub(r'[ \t]*<base\b[^>]*>[ \t]*\n?', '', html, count=1, flags=re.I)
+    base_tag = _base_href_tag()
+    if base_tag:
+        html = re.sub(r'</title>', lambda m: m.group(0) + "\n  " + base_tag, html, count=1)
     if DEPLOY["offline"]:
         html = _rewrite_html_for_offline(html)
     inject = _deploy_inline_script()
@@ -3506,8 +3521,13 @@ if __name__ == "__main__":
     )
     ap.add_argument(
         "--url-prefix",
-        default=os.environ.get("DASH_URL_PREFIX", ""),
-        help="URL mount prefix behind a reverse proxy (e.g. /montreal-traffic-emissions-dashboard)",
+        default=os.environ.get("DASH_URL_PREFIX") or os.environ.get("DEPLOYMENT_URL_NAME", ""),
+        help=(
+            "URL mount prefix behind a reverse proxy (e.g. /montreal-traffic-emissions-dashboard). "
+            "Also drives the <base href> tag auto-injected into every dashboard page, so it never "
+            "needs to be hand-edited before a deploy. DEPLOYMENT_URL_NAME (bare name, no slashes) "
+            "is accepted as an alias."
+        ),
     )
     ap.add_argument(
         "--api-prefix",
