@@ -3309,7 +3309,7 @@ def _deploy_inline_script() -> str:
 
 
 def _base_href_tag() -> str:
-    """<base href> for the configured mount prefix (DASH_URL_PREFIX / DEPLOYMENT_URL_NAME).
+    """<base href> for the configured mount prefix (DASH_URL_PREFIX).
 
     Lets every dashboard page resolve relative assets/API calls correctly when
     served behind a reverse-proxy subpath, without hand-editing the exported
@@ -3523,9 +3523,8 @@ if __name__ == "__main__":
         "--url-prefix",
         default=os.environ.get("DASH_URL_PREFIX"),
         help=(
-            "URL mount prefix behind a reverse proxy (e.g. /montreal-traffic-emissions-dashboard). "
-            "Also drives the <base href> tag auto-injected into every dashboard page, so it never "
-            "needs to be hand-edited before a deploy."
+            "URL mount prefix behind a reverse proxy (e.g. /montreal-traffic-emissions-dashboard). Also drives the "
+            "<base href> tag auto-injected into every dashboard page, so it never needs to be hand-edited before a deploy."
         ),
     )
     ap.add_argument(
