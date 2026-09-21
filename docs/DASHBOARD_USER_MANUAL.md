@@ -220,11 +220,11 @@ If the map is empty, confirm a zone is selected and the health check shows build
 
 ### 8.4 Flows
 
-Shows **incoming** car trips: where travelers came **from** when **entering** the selected destination zone(s). Origins that sit inside the selection are treated as intra-region and are not drawn as incoming arcs.
+The **Flows** nav tab always opens empty (no destination). A reload also starts from that default. Zone or building selections are not carried over. Use **View incoming flows** on the zone panel if you want to jump to Flows with the current zone selection.
 
 **How to use:**
 
-1. Open **Flows**.
+1. Open **Flows** from the nav, or use **View incoming flows** from a zone selection.
 2. **Click any zone** on the map. Arcs appear from origin zones toward the destination. Ctrl/Cmd or Shift click to add destinations; the table and arcs merge.
 3. The sidebar lists top origin zones (trips, CO₂, share of incoming).
 4. Use the **rank range** control (e.g. 1–10, 11–20) to page through origin zones when many flows exist.

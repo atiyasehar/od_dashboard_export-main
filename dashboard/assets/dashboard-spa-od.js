@@ -28,7 +28,7 @@
   var ready = {};
   var dataReady = {};
   var activePage = 'od-zones';
-  var FRAME_CACHE_BUST = '20260909-transit-pins';
+  var FRAME_CACHE_BUST = '20260921-flows-reset';
 
   function parentAttributionParam() {
     try {
@@ -125,7 +125,7 @@
         window.history.pushState({ dashPage: 'od-flows' }, '', url);
       }
     } catch (_) { /* empty */ }
-    showPage('od-flows', false);
+    showPage('od-flows', false, { keepFlowsDest: true });
     notifyFlowsFrameDest({ dest_geo_id: dest, dest_geo_ids: ids, zone_by: zb });
     window.setTimeout(function () {
       notifyFlowsFrameDest({ dest_geo_id: dest, dest_geo_ids: ids, zone_by: zb });
@@ -179,6 +179,27 @@
     return '';
   }
 
+  function stripDestFromParentUrl() {
+    try {
+      var params = new URLSearchParams(window.location.search);
+      if (!params.has('dest_geo_id') && !params.has('dest_geo_ids')) return;
+      params.delete('dest_geo_id');
+      params.delete('dest_geo_ids');
+      var url = spaUrl(params);
+      if (window.history && window.history.replaceState) {
+        window.history.replaceState(window.history.state, '', url);
+      }
+    } catch (_) { /* empty */ }
+  }
+
+  function resetFlowsPage() {
+    stripDestFromParentUrl();
+    notifyFlowsFrameDest({ dest_geo_id: '', dest_geo_ids: [], zone_by: parentAttributionZoneBy() });
+    if (window.DashHostOd && typeof DashHostOd.clearZoneSidebar === 'function') {
+      DashHostOd.clearZoneSidebar();
+    }
+  }
+
   function notifyFrameShow(page) {
     var frame = frames[page];
     if (!frame || !frame.contentWindow) return;
@@ -200,8 +221,9 @@
     });
   }
 
-  function showPage(page, push) {
+  function showPage(page, push, opts) {
     if (!frames[page]) return;
+    var keepFlowsDest = !!(opts && opts.keepFlowsDest);
     Object.keys(frames).forEach(function (key) {
       frames[key].classList.toggle('active', key === page);
     });
@@ -217,6 +239,10 @@
       var params = new URLSearchParams(window.location.search);
       var view = VIEW_BY_PAGE[page] || 'zones';
       params.set('view', view);
+      if (page !== 'od-flows' || !keepFlowsDest) {
+        params.delete('dest_geo_id');
+        params.delete('dest_geo_ids');
+      }
       var q = params.toString();
       var url = spaUrl(params);
       if (window.history && window.history.pushState) {
@@ -225,13 +251,9 @@
     }
     notifyFrameShow(page);
     if (page === 'od-flows') {
-      var dest = flowsDestFromParentUrl();
-      if (dest) {
-        notifyFlowsFrameDest({
-          dest_geo_id: dest,
-          zone_by: parentAttributionZoneBy(),
-        });
-      }
+      if (!keepFlowsDest) resetFlowsPage();
+    } else {
+      stripDestFromParentUrl();
     }
   }
 
@@ -407,7 +429,15 @@
 
   function bindHistory() {
     window.addEventListener('popstate', function () {
-      showPage(qsViewPage(), false);
+      var page = qsViewPage();
+      var dest = flowsDestFromParentUrl();
+      showPage(page, false, { keepFlowsDest: page === 'od-flows' && !!dest });
+      if (page === 'od-flows' && dest) {
+        notifyFlowsFrameDest({
+          dest_geo_id: dest,
+          zone_by: parentAttributionZoneBy(),
+        });
+      }
     });
   }
 
@@ -444,22 +474,9 @@
       DashHostOd.setActiveView(initial);
     }
     preloadAllFrames();
+    stripDestFromParentUrl();
     if (initial === 'od-flows') {
-      var initialDest = flowsDestFromParentUrl();
-      if (initialDest) {
-        window.setTimeout(function () {
-          notifyFlowsFrameDest({
-            dest_geo_id: initialDest,
-            zone_by: parentAttributionZoneBy(),
-          });
-        }, 600);
-        window.setTimeout(function () {
-          notifyFlowsFrameDest({
-            dest_geo_id: initialDest,
-            zone_by: parentAttributionZoneBy(),
-          });
-        }, 2200);
-      }
+      window.setTimeout(function () { resetFlowsPage(); }, 400);
     }
     runHostLoadingSequence();
   }
