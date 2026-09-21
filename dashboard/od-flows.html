@@ -452,10 +452,13 @@
     const CACHE_TTL_MS = 60 * 60 * 1000;
     const qs = new URLSearchParams(window.location.search);
     let destGeoId = '';
-    let destGeoIds = (window.DashZoneUi && DashZoneUi.parseGeoIdList)
-      ? DashZoneUi.parseGeoIdList(qs.get('dest_geo_id') || qs.get('dest_geo_ids') || '')
-      : String(qs.get('dest_geo_id') || '').split(',').map((s) => s.trim()).filter(Boolean);
-    destGeoId = destGeoIds[0] || '';
+    let destGeoIds = [];
+    if (!IS_EMBED) {
+      destGeoIds = (window.DashZoneUi && DashZoneUi.parseGeoIdList)
+        ? DashZoneUi.parseGeoIdList(qs.get('dest_geo_id') || qs.get('dest_geo_ids') || '')
+        : String(qs.get('dest_geo_id') || '').split(',').map((s) => s.trim()).filter(Boolean);
+      destGeoId = destGeoIds[0] || '';
+    }
     function selectedDestList() {
       if (destGeoIds && destGeoIds.length) return destGeoIds;
       return destGeoId ? [String(destGeoId)] : [];
@@ -2108,13 +2111,6 @@
           DashEmbed.notifyDataReady({ zones: n });
           DashEmbed.syncHint();
           DashEmbed.notifyReady();
-          DashEmbed.bindShow(() => {
-            const dest = readDestFromParentUrl();
-            if (dest) {
-              handleExternalDestSelection(dest, window.DashNav ? DashNav.readAttribution('rules') : 'rules')
-                .catch((err) => console.warn('parent dest:', err));
-            }
-          });
         }
 
         polygonUpgradePromise = Promise.resolve();
