@@ -31,7 +31,8 @@
     "mtl_boundary_file_padded.geojson"
   ],
   "dump_file": "data/db/od_dashboard_tables.dump",
-  "created_at": "2026-07-15T16:26:02.705882+00:00",
-  "dump_size_mb_approx": 242.0,
-  "zone_table": "public.zones_geom"
+  "created_at": "2026-11-05T19:17:35.206933+00:00",
+  "dump_size_mb_approx": 171.8,
+  "zone_table": "public.zones_geom",
+  "dump_schema": "public"
 }

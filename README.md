@@ -390,7 +390,7 @@ All settings: **`deploy.env`**, environment variables, or CLI flags on `run_dash
 |---------|-----|----------|
 | URL mount prefix | `DASH_URL_PREFIX` | `--url-prefix` |
 | API prefix | `DASH_API_PREFIX` | `--api-prefix` |
-| Show Boundaries nav | `DASH_SHOW_BOUNDARY_BUTTON` | `--show-boundary-button` |
+| Show Boundaries nav | on by default | `--show-boundary-button false` hides it |
 | Offline / air-gapped | `DASH_OFFLINE` | `--offline` |
 
 See [Offline / air-gapped deployment](#offline--air-gapped-deployment) for full details.

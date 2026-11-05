@@ -44,6 +44,7 @@ from dashboard_server import (  # noqa: E402
     MONTREAL_ISLAND_LON_MAX,
     MONTREAL_ISLAND_LON_MIN,
     _build_zone_map_geojson,
+    _build_sp23_official_boundary_geojson,
     _build_zones_boundary_geojson,
     _building_footprint_geojson_sql,
     _building_map_lat_sql,
@@ -1012,6 +1013,23 @@ def api_od10_zones_boundary():
         conn.close()
 
 
+@app.route("/api/od/sp23_official_boundary")
+@app.route("/api/sp23_official_boundary")
+def api_od_sp23_official_boundary():
+    """Official ARTM SP_EPM23 sector outlines."""
+    geojson, zone_count, bounds = _build_sp23_official_boundary_geojson()
+    if bounds is None:
+        bounds = CMM_BOUNDS
+    return jsonify({
+        "geojson": geojson,
+        "zone_count": zone_count,
+        "bounds": bounds,
+        "island_only": False,
+        "layer": "sp23_official",
+        "source": "od",
+    })
+
+
 def _project_root() -> Path:
     data = getattr(_dashboard_server, "REPO_DATA_DIR", None)
     if data:
@@ -1606,7 +1624,52 @@ def _od10_single_zone_stats(cur, geo_id: str | list[str], *, zone_by: str) -> di
 
 
 def _od10_fetch_global_by_category(cur) -> list[dict]:
-    """Island-wide travel-reason rows for sidebar charts."""
+    """Purpose rows for the same island-touch legs as the KPI funnel."""
+    detail = _resolve_od10_table(cur, OD10_DETAIL_CANDIDATES)
+    if (
+        detail
+        and _column_exists(cur, detail, "travel_reason")
+        and _column_exists(cur, detail, "d_fexp")
+        and _column_exists(cur, detail, "expanded_emissions_g")
+        and _column_exists(cur, detail, "distance_m")
+    ):
+        island_sql = _od10_detail_island_sql(cur, detail)
+        emis_leg = "route_emissions_g" if _column_exists(cur, detail, "route_emissions_g") else "expanded_emissions_g"
+        cur.execute(
+            f"""
+            SELECT COALESCE(NULLIF(btrim(travel_reason::text), ''), 'other') AS category,
+                   COUNT(*)::double precision,
+                   COALESCE(SUM(d_fexp), 0)::double precision,
+                   COALESCE(SUM({emis_leg}), 0)::double precision,
+                   COALESCE(SUM(expanded_emissions_g), 0)::double precision,
+                   COALESCE(SUM(distance_m), 0)::double precision / 1000.0,
+                   COALESCE(SUM(distance_m * d_fexp), 0)::double precision / 1000.0
+            FROM {SCHEMA}.{detail}
+            WHERE {island_sql}
+            GROUP BY 1
+            ORDER BY 5 DESC
+            """
+        )
+        out: list[dict] = []
+        for cat, legs, tw, e, ew, d, dw in cur.fetchall():
+            e = float(e or 0)
+            ew = float(ew or 0)
+            row = {
+                "category": cat,
+                "trips": float(legs or 0),
+                "trips_legs": float(legs or 0),
+                "trips_weighted": float(tw or 0),
+                "total_emissions_g": e,
+                "total_emissions_g_legs": e,
+                "total_emissions_g_weighted": ew,
+                "total_emissions_tonnes": e / 1e6,
+                "total_emissions_tonnes_weighted": ew / 1e6,
+                "total_distance_km": float(d or 0),
+                "total_distance_km_weighted": float(dw or 0),
+            }
+            out.append(_od10_promote_weighted_row(row))
+        if out:
+            return out
     cats_tab = _resolve_od10_table(cur, OD10_CATEGORIES_CANDIDATES)
     if not cats_tab:
         return []
@@ -3534,10 +3597,10 @@ if __name__ == "__main__":
     )
     ap.add_argument(
         "--show-boundary-button",
-        default=_str_to_bool(os.environ.get("DASH_SHOW_BOUNDARY_BUTTON", "true")),
+        default=True,
         type=_str_to_bool,
         metavar="BOOL",
-        help="Show Boundaries nav link (default: true). Pass false to hide.",
+        help="Show the Boundaries menu (default: true). Pass false to hide it.",
     )
     ap.add_argument(
         "--offline",
