@@ -3597,10 +3597,10 @@ if __name__ == "__main__":
     )
     ap.add_argument(
         "--show-boundary-button",
-        default=_str_to_bool(os.environ.get("DASH_SHOW_BOUNDARY_BUTTON", "true")),
+        default=True,
         type=_str_to_bool,
         metavar="BOOL",
-        help="Show Boundaries nav link (default: true). Pass false to hide.",
+        help="Show the Boundaries menu (default: true). Pass false to hide it.",
     )
     ap.add_argument(
         "--offline",

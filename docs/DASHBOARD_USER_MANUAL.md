@@ -47,7 +47,7 @@ Optional:
 
 | Variable | When to use |
 |----------|-------------|
-| `DASH_SHOW_BOUNDARY_BUTTON=false` | Hide the **Boundaries** tab in the nav bar |
+| `--show-boundary-button false` | Hide the **Boundaries** tab. It is shown by default. |
 | `DASH_OFFLINE=true` | No internet (bundled maps/charts, no street basemap tiles) |
 
 `deploy.env` is not committed to git. Keep your password private.
@@ -169,7 +169,7 @@ The top navigation bar appears on every page:
 | **Zone maps** | Regional choropleth views |
 | **Buildings** | Building footprints and detail for the selected zone(s) |
 | **Flows** | Origin-to-destination flow arcs for the selected destination(s) |
-| **Boundaries** | Zone polygon outlines (hidden when `DASH_SHOW_BOUNDARY_BUTTON=false`) |
+| **Boundaries** | Zone polygon outlines (shown by default) |
 
 The **home page** (`/`) embeds Zone maps, Buildings, and Flows in one shell with a sidebar of KPIs and charts.
 
@@ -234,7 +234,7 @@ Hover arcs and zones for tooltips. A plain click replaces the destination set.
 
 ### 8.5 Boundaries (optional)
 
-A reference map of zone polygon outlines on a dark basemap. Useful for checking zone IDs and shapes. Transit overlay works here too. This tab is omitted when `DASH_SHOW_BOUNDARY_BUTTON=false` in `deploy.env`.
+A reference map of zone polygon outlines. Useful for checking zone IDs and shapes. Transit overlay works here too. The Boundaries menu is shown by default. Start the server with `--show-boundary-button false` to hide it.
 
 ---
 
