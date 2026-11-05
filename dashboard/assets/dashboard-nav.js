@@ -171,8 +171,6 @@
     'od-buildings': '?view=buildings',
     'od-flows': '?view=flows',
     'od-boundaries': 'od-zones-boundary.html',
-    'od-boundaries-sp23': 'od-zones-boundary.html?layer=sp23',
-    'od-boundaries-ct': 'od-zones-boundary.html?layer=ct',
   };
 
   function appendApiQuery(base) {

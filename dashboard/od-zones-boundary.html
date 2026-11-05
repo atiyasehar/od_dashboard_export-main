@@ -109,14 +109,6 @@
   </style>
 </head>
 <body data-dash-page="od-boundaries">
-  <script>
-  (function () {
-    var layer = '';
-    try { layer = (new URLSearchParams(window.location.search).get('layer') || '').trim().toLowerCase(); } catch (_) {}
-    if (layer === 'sp23') document.body.dataset.dashPage = 'od-boundaries-sp23';
-    else if (layer === 'ct') document.body.dataset.dashPage = 'od-boundaries-ct';
-  })();
-  </script>
   <div id="pageLoading" class="page-loading" aria-live="polite">
     <div class="page-loading-backdrop" aria-hidden="true"></div>
     <div class="page-loading-content">
@@ -135,8 +127,6 @@
         <a class="dash-nav-link" data-page="od-buildings" href="?view=buildings">Buildings</a>
         <a class="dash-nav-link" data-page="od-flows" href="?view=flows">Flows</a>
         <a class="dash-nav-link dash-nav-boundaries" data-page="od-boundaries" href="od-zones-boundary.html">Boundaries</a>
-        <a class="dash-nav-link dash-nav-boundaries" data-page="od-boundaries-sp23" href="od-zones-boundary.html?layer=sp23" title="SP23 zone boundaries only">SP23</a>
-        <a class="dash-nav-link dash-nav-boundaries" data-page="od-boundaries-ct" href="od-zones-boundary.html?layer=ct" title="Census tract boundaries">CT</a>
       </nav>
       <span class="pill" id="liveHint">Click a zone · search by CT code</span>
     </header>
@@ -171,17 +161,19 @@
       <div class="card">
         <h3>About this view</h3>
         <p id="aboutText">
-          Outlines every PopGen zone in the Communauté métropolitaine de Montréal study area.
-          No emissions overlay — use as a spatial reference for PM23 OD zones, flows, and building maps.
-          <strong>SP23</strong> and <strong>CT</strong> in the menu show each boundary on its own.
+          Census tract outlines for PM23 OD zones. No emissions overlay.
+          Switch to <strong>ARTM boundaries</strong> for official sector outlines.
         </p>
       </div>
     </aside>
 
     <section class="main">
       <div class="map-toolbar">
-        <strong id="mapTitle">Zone boundaries</strong>
-        <span class="pill">od-boundaries-v2</span>
+        <strong id="mapTitle">Boundaries</strong>
+        <nav class="dash-subnav" aria-label="Boundary layer" id="layerNav">
+          <button type="button" class="dash-subnav-link" data-layer="sp23">ARTM boundaries</button>
+          <button type="button" class="dash-subnav-link active" data-layer="ct">Census tract</button>
+        </nav>
         <nav class="dash-subnav" aria-label="Map extent" id="extentNav">
           <button type="button" class="dash-subnav-link active" data-extent="cmm">Full CMM</button>
           <button type="button" class="dash-subnav-link" data-extent="island">Montréal island</button>
@@ -225,9 +217,9 @@
     var layerMode = (function () {
       try {
         var v = (new URLSearchParams(window.location.search).get('layer') || '').trim().toLowerCase();
-        if (v === 'sp23' || v === 'ct') return v;
+        if (v === 'sp23' || v === 'artm') return 'sp23';
       } catch (_) {}
-      return 'all';
+      return 'ct';
     })();
 
     function fetchJson(path) {
@@ -271,9 +263,10 @@
     };
 
     function applyLayerMode() {
-      if (layerMode === 'all') return;
+      document.querySelectorAll('#layerNav .dash-subnav-link').forEach(function (btn) {
+        btn.classList.toggle('active', btn.dataset.layer === layerMode);
+      });
       var tagline = document.querySelector('header.shell .tagline');
-      var title = document.getElementById('mapTitle');
       var find = document.getElementById('findHelp');
       var about = document.getElementById('aboutText');
       if (layerMode === 'sp23') {
@@ -284,19 +277,26 @@
         hoverStyle.color = '#e879f9';
         hoverStyle.weight = 2.5;
         hoverStyle.fillColor = 'rgba(232, 121, 249, 0.28)';
-        document.title = 'PopGen · Actual OD survey (PM23) · SP23 boundaries';
-        if (tagline) tagline.textContent = 'SP23 zone boundaries · ARTM SP_EPM23';
-        document.getElementById('liveHint').textContent = 'Click a sector · search by SP23 id';
-        if (title) title.textContent = 'SP23 zone boundaries';
-        if (find) find.textContent = 'Enter an SP23 sector id to highlight and zoom.';
-        document.getElementById('zoneSearch').placeholder = 'SP23 id…';
-        if (about) about.innerHTML = 'Official ARTM <strong>SP23</strong> sector outlines (<code>SP_EPM23</code>). Census tracts stay off this view.';
-      } else if (layerMode === 'ct') {
-        document.title = 'PopGen · Actual OD survey (PM23) · CT boundaries';
+        document.title = 'PopGen · Actual OD survey (PM23) · ARTM boundaries';
+        if (tagline) tagline.textContent = 'ARTM sector boundaries';
+        document.getElementById('liveHint').textContent = 'Click a sector · search by sector id';
+        if (find) find.textContent = 'Enter an ARTM sector id to highlight and zoom.';
+        document.getElementById('zoneSearch').placeholder = 'ARTM sector id…';
+        if (about) about.innerHTML = 'Official ARTM sector outlines. Census tracts stay off this view.';
+      } else {
+        defaultStyle.color = 'rgba(14, 116, 144, 0.95)';
+        defaultStyle.weight = 1.4;
+        defaultStyle.fill = false;
+        defaultStyle.fillOpacity = 0;
+        hoverStyle.color = '#5eead4';
+        hoverStyle.weight = 2;
+        hoverStyle.fillColor = 'rgba(94, 234, 212, 0.18)';
+        document.title = 'PopGen · Actual OD survey (PM23) · Census tract';
         if (tagline) tagline.textContent = 'Census tract boundaries · reference map (no emissions)';
         document.getElementById('liveHint').textContent = 'Click a tract · search by CT code';
-        if (title) title.textContent = 'CT boundaries';
-        if (about) about.innerHTML = 'Census tract outlines for PM23 OD zones. SP23 sectors stay off this view.';
+        if (find) find.innerHTML = 'Enter a census-tract <code>zone_code</code> (e.g. 4620453.02) or internal <code>geo_id</code>.';
+        document.getElementById('zoneSearch').placeholder = 'CT code or geo_id…';
+        if (about) about.innerHTML = 'Census tract outlines for PM23 OD zones. Switch to <strong>ARTM boundaries</strong> for official sector outlines.';
       }
     }
 
@@ -327,7 +327,7 @@
       var zones = document.getElementById('linkZones');
       var buildings = document.getElementById('linkBuildings');
       if (layerMode === 'sp23') {
-        document.getElementById('selGeoId').textContent = 'SP23 ' + (props.sp23 || geoId) + (props.nomsp ? ' · ' + props.nomsp : '');
+        document.getElementById('selGeoId').textContent = 'ARTM ' + (props.sp23 || geoId) + (props.nomsp ? ' · ' + props.nomsp : '');
         if (flows) flows.style.display = 'none';
         if (zones) zones.style.display = 'none';
         if (buildings) buildings.style.display = 'none';
@@ -388,7 +388,7 @@
           highlightZone(key, false);
         });
         var label = layerMode === 'sp23'
-          ? ('SP23 ' + p.sp23 + (p.nomsp ? '<br>' + p.nomsp : ''))
+          ? ('ARTM ' + p.sp23 + (p.nomsp ? '<br>' + p.nomsp : ''))
           : zoneCt(p.geo_id, p);
         lyr.bindTooltip(
           '<div class="zone-tooltip"><strong>' + label + '</strong></div>',
@@ -490,6 +490,25 @@
       if (e.key === 'Enter') runSearch();
     });
     document.getElementById('showIslandOutline').addEventListener('change', loadIslandOutline);
+
+    document.getElementById('layerNav').addEventListener('click', function (e) {
+      var btn = e.target.closest('[data-layer]');
+      if (!btn || btn.classList.contains('active')) return;
+      layerMode = btn.dataset.layer === 'sp23' ? 'sp23' : 'ct';
+      var url = new URL(window.location.href);
+      if (layerMode === 'sp23') url.searchParams.set('layer', 'sp23');
+      else url.searchParams.delete('layer');
+      history.replaceState(null, '', url);
+      applyLayerMode();
+      PageLoading.show();
+      loadBoundaries(currentExtent)
+        .then(function () { return loadIslandOutline(); })
+        .then(function () { finishExtentFit(); return PageLoading.finish(280); })
+        .catch(function (err) {
+          console.error(err);
+          PageLoading.hideNow();
+        });
+    });
 
     document.getElementById('extentNav').addEventListener('click', function (e) {
       var btn = e.target.closest('[data-extent]');
