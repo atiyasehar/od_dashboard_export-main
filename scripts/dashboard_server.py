@@ -1081,14 +1081,26 @@ def _build_zones_boundary_geojson(cur, *, island_only: bool) -> tuple[dict | Non
 
 
 def _sp23_official_geojson_path() -> Path | None:
-    """Official ARTM SP_EPM23 outlines, in the bundle or the parent PopGen data folder."""
+    """Official ARTM outlines shipped inside the export folder.
+
+    ``dashboard/assets/sp23_official.geojson`` travels with the folder that is
+    copied to another machine. The other paths cover older layouts.
+    """
     here = Path(__file__).resolve()
+    bundle = here.parent.parent
     candidates = [
+        bundle / "dashboard" / "assets" / "sp23_official.geojson",
+        bundle / "data" / "popgen_inputs" / "sp23_official.geojson",
+        bundle / "Data" / "popgen_inputs" / "sp23_official.geojson",
         REPO_DATA_DIR / "popgen_inputs" / "sp23_official.geojson",
-        here.parent.parent / "data" / "popgen_inputs" / "sp23_official.geojson",
-        here.parent.parent.parent / "Data" / "popgen_inputs" / "sp23_official.geojson",
+        bundle.parent / "Data" / "popgen_inputs" / "sp23_official.geojson",
     ]
+    seen: set[str] = set()
     for path in candidates:
+        key = str(path.resolve()) if path.parent.exists() else str(path)
+        if key in seen:
+            continue
+        seen.add(key)
         if path.is_file():
             return path
     return None
@@ -1104,19 +1116,21 @@ def _build_sp23_official_boundary_geojson() -> tuple[dict | None, int, list | No
         return _SP23_OFFICIAL_CACHE
     path = _sp23_official_geojson_path()
     if path is None:
-        _SP23_OFFICIAL_CACHE = (None, 0, None)
-        return _SP23_OFFICIAL_CACHE
+        return None, 0, None
     try:
-        obj = json.loads(path.read_text(encoding="utf-8"))
+        obj = json.loads(path.read_text(encoding="utf-8-sig"))
     except (json.JSONDecodeError, OSError):
-        _SP23_OFFICIAL_CACHE = (None, 0, None)
-        return _SP23_OFFICIAL_CACHE
-    fc = obj.get("geojson") if isinstance(obj, dict) else None
-    if not fc or not fc.get("features"):
-        _SP23_OFFICIAL_CACHE = (None, 0, None)
-        return _SP23_OFFICIAL_CACHE
-    count = int(obj.get("zone_count") or len(fc.get("features", [])))
-    bounds = obj.get("bounds")
+        return None, 0, None
+    fc = None
+    bounds = None
+    if isinstance(obj, dict) and obj.get("type") == "FeatureCollection":
+        fc = obj
+    elif isinstance(obj, dict):
+        fc = obj.get("geojson")
+        bounds = obj.get("bounds")
+    if not isinstance(fc, dict) or not fc.get("features"):
+        return None, 0, None
+    count = int(obj.get("zone_count") or len(fc.get("features", []))) if isinstance(obj, dict) else len(fc["features"])
     _SP23_OFFICIAL_CACHE = (fc, count, bounds)
     return _SP23_OFFICIAL_CACHE
 

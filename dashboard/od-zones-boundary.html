@@ -417,6 +417,34 @@
       }).catch(function () {});
     }
 
+    function artmAssetUrl() {
+      var path = '/assets/sp23_official.geojson';
+      if (window.DashConfig && typeof DashConfig.dashUrl === 'function') return DashConfig.dashUrl(path);
+      return path;
+    }
+
+    function asArtmPayload(obj) {
+      var fc = obj && obj.type === 'FeatureCollection' ? obj : (obj && obj.geojson);
+      var features = fc && fc.features ? fc.features : [];
+      return {
+        geojson: fc && features.length ? fc : null,
+        zone_count: (obj && obj.zone_count) || features.length,
+        bounds: obj && obj.bounds
+      };
+    }
+
+    function loadArtmBoundaries() {
+      return fetch(artmAssetUrl() + '?v=2').then(function (r) {
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        return r.json();
+      }).then(asArtmPayload).then(function (payload) {
+        if (payload.geojson && payload.geojson.features && payload.geojson.features.length) return payload;
+        throw new Error('empty ARTM file');
+      }).catch(function () {
+        return fetchJson('/api/od/sp23_official_boundary').then(asArtmPayload);
+      });
+    }
+
     function loadBoundaries(extent) {
       currentExtent = extent === 'island' ? 'island' : 'cmm';
       var islandOnly = currentExtent === 'island' ? '1' : '0';
@@ -425,10 +453,10 @@
         btn.classList.toggle('active', btn.dataset.extent === currentExtent);
       });
 
-      var path = layerMode === 'sp23'
-        ? '/api/od/sp23_official_boundary'
-        : ('/api/od/zones_boundary?island_only=' + islandOnly);
-      return fetchJson(path).then(function (data) {
+      var req = layerMode === 'sp23'
+        ? loadArtmBoundaries()
+        : fetchJson('/api/od/zones_boundary?island_only=' + islandOnly);
+      return req.then(function (data) {
         zoneIndex = {};
         selectedGeoId = null;
         clearHighlight();
