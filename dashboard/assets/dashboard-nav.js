@@ -107,8 +107,9 @@
 
     document.querySelectorAll('.dash-nav-link').forEach(function (a) {
       var href = a.getAttribute('href');
-      if (href && href.indexOf('?') === -1 && href.indexOf('#') !== 0) {
+      if (href && href.indexOf('#') !== 0 && !a.dataset.hrefReady) {
         a.setAttribute('href', appendPreservedQuery(href));
+        a.dataset.hrefReady = '1';
       }
       if (page && a.dataset.page === page) {
         a.classList.add('active');
@@ -170,6 +171,8 @@
     'od-buildings': '?view=buildings',
     'od-flows': '?view=flows',
     'od-boundaries': 'od-zones-boundary.html',
+    'od-boundaries-sp23': 'od-zones-boundary.html?layer=sp23',
+    'od-boundaries-ct': 'od-zones-boundary.html?layer=ct',
   };
 
   function appendApiQuery(base) {
@@ -199,7 +202,7 @@
 
         if (isSpaHost()) {
           e.preventDefault();
-          if (page === 'od-boundaries' || page === 'boundaries') {
+          if (page.indexOf('boundaries') !== -1) {
             if (window.DashConfig && typeof DashConfig.showBoundaryButton === 'function' && !DashConfig.showBoundaryButton()) {
               return;
             }
@@ -346,7 +349,7 @@
         if (!j || !j.deploy || j.deploy.show_boundary_button !== false) return;
         document.body.setAttribute('data-hide-boundary-nav', 'true');
         document.querySelectorAll(
-          '.dash-nav-link[data-page="od-boundaries"], .dash-nav-link[data-page="boundaries"], .dash-nav-boundaries'
+          '.dash-nav-link[data-page="od-boundaries"], .dash-nav-link[data-page="od-boundaries-sp23"], .dash-nav-link[data-page="od-boundaries-ct"], .dash-nav-link[data-page="boundaries"], .dash-nav-boundaries'
         ).forEach(function (a) {
           a.style.display = 'none';
           a.setAttribute('aria-hidden', 'true');

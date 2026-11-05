@@ -87,7 +87,8 @@
     }
     .map-toolbar strong { color: var(--text); }
     .map-wrap { flex: 1; min-height: 320px; position: relative; }
-    #map { width: 100%; height: 100%; min-height: 420px; background: #0a0e14; }
+    #map { width: 100%; height: 100%; min-height: 420px; background: #d5ddd4; }
+    #map .dash-basemap-dim { filter: none; }
     .pill {
       border: 1px solid var(--border); border-radius: 999px; padding: 0.2rem 0.55rem;
       font-variant-numeric: tabular-nums; font-size: 0.78rem; color: var(--muted);
@@ -108,6 +109,14 @@
   </style>
 </head>
 <body data-dash-page="od-boundaries">
+  <script>
+  (function () {
+    var layer = '';
+    try { layer = (new URLSearchParams(window.location.search).get('layer') || '').trim().toLowerCase(); } catch (_) {}
+    if (layer === 'sp23') document.body.dataset.dashPage = 'od-boundaries-sp23';
+    else if (layer === 'ct') document.body.dataset.dashPage = 'od-boundaries-ct';
+  })();
+  </script>
   <div id="pageLoading" class="page-loading" aria-live="polite">
     <div class="page-loading-backdrop" aria-hidden="true"></div>
     <div class="page-loading-content">
@@ -125,7 +134,9 @@
         <a class="dash-nav-link" data-page="od-zones" href="?view=zones">Zone maps</a>
         <a class="dash-nav-link" data-page="od-buildings" href="?view=buildings">Buildings</a>
         <a class="dash-nav-link" data-page="od-flows" href="?view=flows">Flows</a>
-        <a class="dash-nav-link dash-nav-boundaries active" data-page="od-boundaries" href="od-zones-boundary.html">Boundaries</a>
+        <a class="dash-nav-link dash-nav-boundaries" data-page="od-boundaries" href="od-zones-boundary.html">Boundaries</a>
+        <a class="dash-nav-link dash-nav-boundaries" data-page="od-boundaries-sp23" href="od-zones-boundary.html?layer=sp23" title="SP23 zone boundaries only">SP23</a>
+        <a class="dash-nav-link dash-nav-boundaries" data-page="od-boundaries-ct" href="od-zones-boundary.html?layer=ct" title="Census tract boundaries">CT</a>
       </nav>
       <span class="pill" id="liveHint">Click a zone · search by CT code</span>
     </header>
@@ -143,7 +154,7 @@
       </div>
       <div class="card">
         <h3>Find zone</h3>
-        <p>Enter a census-tract <code>zone_code</code> (e.g. 4620453.02) or internal <code>geo_id</code>.</p>
+        <p id="findHelp">Enter a census-tract <code>zone_code</code> (e.g. 4620453.02) or internal <code>geo_id</code>.</p>
         <div class="search-row">
           <input id="zoneSearch" type="text" placeholder="CT code or geo_id…" autocomplete="off" />
           <button type="button" id="zoneSearchBtn">Go</button>
@@ -159,16 +170,17 @@
       </div>
       <div class="card">
         <h3>About this view</h3>
-        <p>
+        <p id="aboutText">
           Outlines every PopGen zone in the Communauté métropolitaine de Montréal study area.
           No emissions overlay — use as a spatial reference for PM23 OD zones, flows, and building maps.
+          <strong>SP23</strong> and <strong>CT</strong> in the menu show each boundary on its own.
         </p>
       </div>
     </aside>
 
     <section class="main">
       <div class="map-toolbar">
-        <strong>Zone boundaries</strong>
+        <strong id="mapTitle">Zone boundaries</strong>
         <span class="pill">od-boundaries-v2</span>
         <nav class="dash-subnav" aria-label="Map extent" id="extentNav">
           <button type="button" class="dash-subnav-link active" data-extent="cmm">Full CMM</button>
@@ -210,6 +222,13 @@
       return '';
     }
     var API = apiBase();
+    var layerMode = (function () {
+      try {
+        var v = (new URLSearchParams(window.location.search).get('layer') || '').trim().toLowerCase();
+        if (v === 'sp23' || v === 'ct') return v;
+      } catch (_) {}
+      return 'all';
+    })();
 
     function fetchJson(path) {
       var url = (window.DashConfig && typeof DashConfig.apiUrl === 'function')
@@ -222,7 +241,7 @@
     }
 
     var map = L.map('map', { zoomControl: true, preferCanvas: true });
-    DashMapBasemap.addTo(map, 'dark_all', { maxZoom: 19 });
+    DashMapBasemap.addTo(map, 'light_all');
     if (window.DashMapTransit) DashMapTransit.attach(map);
 
     var boundaryLayer = null;
@@ -233,10 +252,10 @@
     var selectedGeoId = null;
 
     var defaultStyle = {
-      color: 'rgba(148, 163, 184, 0.55)',
-      weight: 1,
-      fillColor: 'rgba(56, 189, 248, 0.06)',
-      fillOpacity: 0.35
+      color: 'rgba(14, 116, 144, 0.95)',
+      weight: 1.4,
+      fill: false,
+      fillOpacity: 0
     };
     var hoverStyle = {
       color: '#5eead4',
@@ -250,6 +269,36 @@
       fillColor: 'rgba(251, 191, 36, 0.22)',
       fillOpacity: 0.55
     };
+
+    function applyLayerMode() {
+      if (layerMode === 'all') return;
+      var tagline = document.querySelector('header.shell .tagline');
+      var title = document.getElementById('mapTitle');
+      var find = document.getElementById('findHelp');
+      var about = document.getElementById('aboutText');
+      if (layerMode === 'sp23') {
+        defaultStyle.color = '#c026d3';
+        defaultStyle.weight = 2;
+        defaultStyle.fill = false;
+        defaultStyle.fillOpacity = 0;
+        hoverStyle.color = '#e879f9';
+        hoverStyle.weight = 2.5;
+        hoverStyle.fillColor = 'rgba(232, 121, 249, 0.28)';
+        document.title = 'PopGen · Actual OD survey (PM23) · SP23 boundaries';
+        if (tagline) tagline.textContent = 'SP23 zone boundaries · ARTM SP_EPM23';
+        document.getElementById('liveHint').textContent = 'Click a sector · search by SP23 id';
+        if (title) title.textContent = 'SP23 zone boundaries';
+        if (find) find.textContent = 'Enter an SP23 sector id to highlight and zoom.';
+        document.getElementById('zoneSearch').placeholder = 'SP23 id…';
+        if (about) about.innerHTML = 'Official ARTM <strong>SP23</strong> sector outlines (<code>SP_EPM23</code>). Census tracts stay off this view.';
+      } else if (layerMode === 'ct') {
+        document.title = 'PopGen · Actual OD survey (PM23) · CT boundaries';
+        if (tagline) tagline.textContent = 'Census tract boundaries · reference map (no emissions)';
+        document.getElementById('liveHint').textContent = 'Click a tract · search by CT code';
+        if (title) title.textContent = 'CT boundaries';
+        if (about) about.innerHTML = 'Census tract outlines for PM23 OD zones. SP23 sectors stay off this view.';
+      }
+    }
 
     function pageUrl(path, extraParams) {
       var q = new URLSearchParams(window.location.search);
@@ -273,8 +322,21 @@
       }
       card.hidden = false;
       var feat = zoneIndex[String(geoId)];
-      var zc = feat && feat.properties ? feat.properties.zone_code : null;
-      document.getElementById('selGeoId').textContent = zoneCt(geoId, { zone_code: zc });
+      var props = feat && feat.properties ? feat.properties : {};
+      var flows = document.getElementById('linkFlows');
+      var zones = document.getElementById('linkZones');
+      var buildings = document.getElementById('linkBuildings');
+      if (layerMode === 'sp23') {
+        document.getElementById('selGeoId').textContent = 'SP23 ' + (props.sp23 || geoId) + (props.nomsp ? ' · ' + props.nomsp : '');
+        if (flows) flows.style.display = 'none';
+        if (zones) zones.style.display = 'none';
+        if (buildings) buildings.style.display = 'none';
+      } else {
+        document.getElementById('selGeoId').textContent = zoneCt(geoId, { zone_code: props.zone_code });
+        if (flows) flows.style.display = '';
+        if (zones) zones.style.display = '';
+        if (buildings) buildings.style.display = '';
+      }
       document.getElementById('selCoords').textContent =
         (lat != null && lon != null) ? ('Centroid · ' + Number(lat).toFixed(4) + ', ' + Number(lon).toFixed(4)) : '';
       document.getElementById('linkFlows').href = pageUrl('/od-flows.html', { dest_geo_id: String(geoId) });
@@ -312,19 +374,24 @@
     function bindZoneLayer(layer) {
       layer.eachLayer(function (lyr) {
         var p = lyr.feature && lyr.feature.properties;
-        if (!p || p.geo_id == null) return;
-        zoneIndex[String(p.geo_id)] = lyr.feature;
+        if (!p) return;
+        var key = layerMode === 'sp23' ? p.sp23 : p.geo_id;
+        if (key == null) return;
+        zoneIndex[String(key)] = lyr.feature;
         lyr.on('mouseover', function () {
-          if (String(p.geo_id) !== selectedGeoId) lyr.setStyle(hoverStyle);
+          if (String(key) !== selectedGeoId) lyr.setStyle(hoverStyle);
         });
         lyr.on('mouseout', function () {
-          if (String(p.geo_id) !== selectedGeoId) lyr.setStyle(defaultStyle);
+          if (String(key) !== selectedGeoId) lyr.setStyle(defaultStyle);
         });
         lyr.on('click', function () {
-          highlightZone(p.geo_id, false);
+          highlightZone(key, false);
         });
+        var label = layerMode === 'sp23'
+          ? ('SP23 ' + p.sp23 + (p.nomsp ? '<br>' + p.nomsp : ''))
+          : zoneCt(p.geo_id, p);
         lyr.bindTooltip(
-          '<div class="zone-tooltip"><strong>' + zoneCt(p.geo_id, p) + '</strong></div>',
+          '<div class="zone-tooltip"><strong>' + label + '</strong></div>',
           { sticky: true, direction: 'top', opacity: 0.95 }
         );
       });
@@ -358,7 +425,10 @@
         btn.classList.toggle('active', btn.dataset.extent === currentExtent);
       });
 
-      return fetchJson('/api/od/zones_boundary?island_only=' + islandOnly).then(function (data) {
+      var path = layerMode === 'sp23'
+        ? '/api/od/sp23_official_boundary'
+        : ('/api/od/zones_boundary?island_only=' + islandOnly);
+      return fetchJson(path).then(function (data) {
         zoneIndex = {};
         selectedGeoId = null;
         clearHighlight();
@@ -380,6 +450,9 @@
         boundaryLayer = L.geoJSON(gj, { style: defaultStyle }).addTo(map);
         bindZoneLayer(boundaryLayer);
 
+        if (layerMode === 'sp23' && currentExtent === 'island' && islandLayer) {
+          try { map.fitBounds(islandLayer.getBounds(), { padding: [24, 24] }); return; } catch (_) {}
+        }
         var bounds = data.bounds;
         if (bounds && bounds.length === 2) {
           map.fitBounds(bounds, { padding: [24, 24] });
@@ -389,11 +462,18 @@
       });
     }
 
+    function finishExtentFit() {
+      if (highlightLayer) return;
+      if (layerMode === 'sp23' && currentExtent === 'island' && islandLayer) {
+        try { map.fitBounds(islandLayer.getBounds(), { padding: [24, 24] }); } catch (_) {}
+      }
+    }
+
     function runSearch() {
       var raw = (document.getElementById('zoneSearch').value || '').trim();
       if (!raw) return;
       var q = raw;
-      if (window.DashZoneUi && DashZoneUi.resolveGeoIdQuery) {
+      if (layerMode !== 'sp23' && window.DashZoneUi && DashZoneUi.resolveGeoIdQuery) {
         var resolved = DashZoneUi.resolveGeoIdQuery(raw);
         if (resolved) q = resolved;
       }
@@ -417,7 +497,7 @@
       PageLoading.show();
       loadBoundaries(btn.dataset.extent)
         .then(function () { return loadIslandOutline(); })
-        .then(function () { return PageLoading.finish(280); })
+        .then(function () { finishExtentFit(); return PageLoading.finish(280); })
         .catch(function (err) {
           console.error(err);
           PageLoading.hideNow();
@@ -426,9 +506,11 @@
 
     var qs = new URLSearchParams(window.location.search);
     var qsZone = (qs.get('geo_id') || qs.get('dest_geo_id') || qs.get('zone_code') || qs.get('dest_zone_code') || '').trim();
+    var qsSp23 = (qs.get('sp23') || '').trim();
     var qsExtent = (qs.get('extent') || 'cmm').trim().toLowerCase();
     if (qsExtent === 'island') currentExtent = 'island';
 
+    applyLayerMode();
     PageLoading.init();
     PageLoading.show();
 
@@ -441,7 +523,11 @@
       .catch(function () { return loadBoundaries(currentExtent); })
       .then(function () { return loadIslandOutline(); })
       .then(function () {
-        if (qsZone) {
+        finishExtentFit();
+        if (layerMode === 'sp23' && qsSp23) {
+          document.getElementById('zoneSearch').value = qsSp23;
+          highlightZone(qsSp23, true);
+        } else if (layerMode !== 'sp23' && qsZone) {
           var qid = qsZone;
           if (window.DashZoneUi && DashZoneUi.resolveGeoIdQuery) {
             var resolved = DashZoneUi.resolveGeoIdQuery(qsZone);

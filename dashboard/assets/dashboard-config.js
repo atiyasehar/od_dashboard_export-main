@@ -76,7 +76,7 @@
     }
     if (!hide) return;
     document.querySelectorAll(
-      '.dash-nav-link[data-page="od-boundaries"], .dash-nav-link[data-page="boundaries"], .dash-nav-boundaries'
+      '.dash-nav-link[data-page="od-boundaries"], .dash-nav-link[data-page="od-boundaries-sp23"], .dash-nav-link[data-page="od-boundaries-ct"], .dash-nav-link[data-page="boundaries"], .dash-nav-boundaries'
     ).forEach(function (a) {
       a.style.display = 'none';
       a.setAttribute('aria-hidden', 'true');

@@ -136,7 +136,8 @@
 
   function avgEmissionsKgPerTrip(avgG) {
     var g = Number(avgG);
-    return Number.isFinite(g) ? Math.round(g / 1000) : null;
+    if (!Number.isFinite(g)) return null;
+    return Math.round((g / 1000) * 10) / 10;
   }
 
   function legStatsFrom(stats) {

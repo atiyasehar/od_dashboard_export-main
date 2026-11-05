@@ -1080,6 +1080,47 @@ def _build_zones_boundary_geojson(cur, *, island_only: bool) -> tuple[dict | Non
     return {"type": "FeatureCollection", "features": features}, len(features), bounds
 
 
+def _sp23_official_geojson_path() -> Path | None:
+    """Official ARTM SP_EPM23 outlines, in the bundle or the parent PopGen data folder."""
+    here = Path(__file__).resolve()
+    candidates = [
+        REPO_DATA_DIR / "popgen_inputs" / "sp23_official.geojson",
+        here.parent.parent / "data" / "popgen_inputs" / "sp23_official.geojson",
+        here.parent.parent.parent / "Data" / "popgen_inputs" / "sp23_official.geojson",
+    ]
+    for path in candidates:
+        if path.is_file():
+            return path
+    return None
+
+
+_SP23_OFFICIAL_CACHE: tuple[dict | None, int, list | None] | None = None
+
+
+def _build_sp23_official_boundary_geojson() -> tuple[dict | None, int, list | None]:
+    """Official ARTM SP_EPM23 sector outlines (pre-exported GeoJSON, not a CT dissolve)."""
+    global _SP23_OFFICIAL_CACHE
+    if _SP23_OFFICIAL_CACHE is not None:
+        return _SP23_OFFICIAL_CACHE
+    path = _sp23_official_geojson_path()
+    if path is None:
+        _SP23_OFFICIAL_CACHE = (None, 0, None)
+        return _SP23_OFFICIAL_CACHE
+    try:
+        obj = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        _SP23_OFFICIAL_CACHE = (None, 0, None)
+        return _SP23_OFFICIAL_CACHE
+    fc = obj.get("geojson") if isinstance(obj, dict) else None
+    if not fc or not fc.get("features"):
+        _SP23_OFFICIAL_CACHE = (None, 0, None)
+        return _SP23_OFFICIAL_CACHE
+    count = int(obj.get("zone_count") or len(fc.get("features", [])))
+    bounds = obj.get("bounds")
+    _SP23_OFFICIAL_CACHE = (fc, count, bounds)
+    return _SP23_OFFICIAL_CACHE
+
+
 def _extent_bounds_from_geom_table(cur, *, island_only: bool) -> list | None:
     """[[south, west], [north, east]] from zone geometry (optionally clipped to island)."""
     zt = _zones_geom_table(cur)
